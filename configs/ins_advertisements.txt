@@ -1,0 +1,47 @@
+"Advertisements"
+{
+    "1"
+    {
+        "text"      "{green}-=LOL=- {default}Track your combat performance {muted}• {yellow}Type !stats"
+        "command"   "stats"
+        "response"  "{yellow}STATS {muted}» {default}https://199.119.136.77/stats/"
+    }
+
+    "2"
+    {
+        "text"      "{green}-=LOL=- {default}Find teammates and server updates {muted}• {blue}Type !discord"
+        "command"   "discord"
+        "response"  "{blue}DISCORD {muted}» {default}https://discord.gg/C3cj4Wf7st"
+    }
+
+    "3"
+    {
+        "text"      "{green}-=LOL=- {default}Join our Steam community {muted}• {cyan}Type !steam"
+        "command"   "steam"
+        "response"  "{cyan}STEAM {muted}» {default}https://steamcommunity.com/groups/losers-online"
+    }
+
+    "4"
+    {
+        "text"      "{cyan}SPAWN PROTECTION {default}Active for 15 seconds {muted}• {red}Attacking removes protection"
+    }
+
+    "5"
+    {
+        "text"      "{yellow}PLAY FAIR {muted}• {default}No cheating, exploits or intentional disruption"
+        "command"   "rules"
+        "response"  "{yellow}RULES {muted}» {default}Play fair. No cheating, exploits, griefing or harassment."
+    }
+
+    "6"
+    {
+        "text"      "{green}SERVER COMMANDS {muted}• {yellow}!stats {default}• {blue}!discord {default}• {cyan}!steam {default}• {orange}!rules {default}• {red}!vote"
+        "command"   "community"
+        "response"  "{default}Commands: {yellow}!stats {default}| {blue}!discord {default}| {cyan}!steam {default}| {orange}!rules {default}| {red}!vote"
+    }
+
+    "7"
+    {
+        "text"      "{red}SPECIAL ROUND VOTE {muted}• {default}Want Knife or Pistol next round? {muted}• {red}Type !vote"
+    }
+}

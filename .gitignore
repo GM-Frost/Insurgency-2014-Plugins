@@ -1,0 +1,20 @@
+# Compiled SourceMod plugins
+compiled/*.smx
+
+# Generated deployment archives
+packages/*
+!packages/.gitkeep
+
+# Local SourceMod/compiler installation
+tools/sourcemod/
+
+# Compiler output and logs
+*.log
+*.tmp
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
