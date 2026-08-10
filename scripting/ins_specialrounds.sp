@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <sdkhooks>
 
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.1.0"
 
 #define VOTE_DURATION 15
 #define STRIP_DELAY 0.25
@@ -118,7 +118,7 @@ public void OnPluginStart()
         "sm_pistolnext",
         Command_PistolNext,
         ADMFLAG_GENERIC,
-        "Schedule a Pistol + Melee Round for next round."
+        "Schedule a Pistol + Melee + Grenades Round for next round."
     );
 
     RegAdminCmd(
@@ -128,9 +128,6 @@ public void OnPluginStart()
         "Cancel a scheduled special round."
     );
 
-    /*
-     * Keep old knife command for convenience.
-     */
     RegAdminCmd(
         "sm_knifecancel",
         Command_SpecialCancel,
@@ -145,9 +142,6 @@ public void OnPluginStart()
         "Show current special-round status."
     );
 
-    /*
-     * Keep old status command too.
-     */
     RegAdminCmd(
         "sm_knifestatus",
         Command_SpecialStatus,
@@ -254,7 +248,7 @@ public Action Command_VoteMenu(
 
     menu.AddItem(
         "pistol",
-        "Pistol + Melee Round - NEXT ROUND"
+        "Pistol + Melee + Grenades - NEXT ROUND"
     );
 
     menu.ExitButton = true;
@@ -407,7 +401,7 @@ void StartSpecialVote(
     else if (type == Round_Pistol)
     {
         vote.SetTitle(
-            "-=LOL=- PISTOL ROUND\n\nPistols + Melee ONLY next round?"
+            "-=LOL=- PISTOL ROUND\n\nPistols + Melee + Grenades next round?"
         );
     }
     else
@@ -536,7 +530,7 @@ public int Handler_SpecialVote(
             else if (g_VoteType == Round_Pistol)
             {
                 PrintToChatAll(
-                    "\x01[\x04-=LOL=-\x01] Vote \x04PASSED\x01 - Next round is PISTOLS + MELEE ONLY! (%.0f%% YES)",
+                    "\x01[\x04-=LOL=-\x01] Vote \x04PASSED\x01 - Next round is PISTOLS + MELEE + GRENADES! (%.0f%% YES)",
                     yesPercent
                 );
             }
@@ -579,18 +573,12 @@ public void Event_RoundStart(
         return;
     }
 
-    /*
-     * No special round scheduled.
-     */
     if (g_NextRound == Round_Normal)
     {
         g_ActiveRound = Round_Normal;
         return;
     }
 
-    /*
-     * Activate the scheduled special round.
-     */
     g_ActiveRound = g_NextRound;
     g_NextRound = Round_Normal;
 
@@ -603,13 +591,10 @@ public void Event_RoundStart(
     else if (g_ActiveRound == Round_Pistol)
     {
         PrintToChatAll(
-            "\x01[\x04-=LOL=-\x01] \x04PISTOL ROUND ACTIVE\x01 - Pistols + Melee ONLY!"
+            "\x01[\x04-=LOL=-\x01] \x04PISTOL ROUND ACTIVE\x01 - Pistols, Melee & Grenades ONLY!"
         );
     }
 
-    /*
-     * Strip anyone already alive.
-     */
     for (int client = 1; client <= MaxClients; client++)
     {
         if (
@@ -683,10 +668,6 @@ public void Event_PlayerSpawn(
         return;
     }
 
-    /*
-     * Give Insurgency a moment to finish generating
-     * the player's selected loadout.
-     */
     CreateTimer(
         STRIP_DELAY,
         Timer_StripWeapons,
@@ -733,9 +714,6 @@ public Action OnWeaponCanUse(
         return Plugin_Continue;
     }
 
-    /*
-     * Prevent picking up or using disallowed weapons.
-     */
     return Plugin_Handled;
 }
 
@@ -803,9 +781,6 @@ void StripDisallowedWeapons(int client)
             sizeof(classname)
         );
 
-        /*
-         * Ignore entities that are not weapon_* entities.
-         */
         if (
             StrContains(
                 classname,
@@ -817,17 +792,11 @@ void StripDisallowedWeapons(int client)
             continue;
         }
 
-        /*
-         * Keep whitelisted weapons.
-         */
         if (IsAllowedForActiveRound(classname))
         {
             continue;
         }
 
-        /*
-         * Remove everything else.
-         */
         if (RemovePlayerItem(client, entity))
         {
             AcceptEntityInput(
@@ -856,11 +825,13 @@ bool IsAllowedForActiveRound(
     if (g_ActiveRound == Round_Pistol)
     {
         /*
-         * Pistol Round = Pistol + Melee.
+         * Pistol Round:
+         * Pistols + Melee + approved Grenades.
          */
         return (
             IsAllowedMelee(classname)
             || IsAllowedPistol(classname)
+            || IsAllowedThrowable(classname)
         );
     }
 
@@ -878,41 +849,17 @@ bool IsAllowedMelee(
 )
 {
     return (
-        StrEqual(
-            classname,
-            "weapon_kabar",
-            false
-        )
+        StrEqual(classname, "weapon_kabar", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_gurkha",
-            false
-        )
+        StrEqual(classname, "weapon_gurkha", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_katana",
-            false
-        )
+        StrEqual(classname, "weapon_katana", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_doi2ins_brassknuckles",
-            false
-        )
+        StrEqual(classname, "weapon_doi2ins_brassknuckles", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_riotshield",
-            false
-        )
+        StrEqual(classname, "weapon_riotshield", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_brassknuckles",
-            false
-        )
+        StrEqual(classname, "weapon_brassknuckles", false)
     );
 }
 
@@ -927,131 +874,85 @@ bool IsAllowedPistol(
 )
 {
     return (
-        StrEqual(
-            classname,
-            "weapon_m9",
-            false
-        )
+        StrEqual(classname, "weapon_m9", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_9mmsidearm",
-            false
-        )
+        StrEqual(classname, "weapon_9mmsidearm", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_m1911seriespistol",
-            false
-        )
+        StrEqual(classname, "weapon_m1911seriespistol", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_m45seriespistol",
-            false
-        )
+        StrEqual(classname, "weapon_m45seriespistol", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_glock33",
-            false
-        )
+        StrEqual(classname, "weapon_glock33", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_glock17",
-            false
-        )
+        StrEqual(classname, "weapon_glock17", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_glock18",
-            false
-        )
+        StrEqual(classname, "weapon_glock18", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_taurusjudge",
-            false
-        )
+        StrEqual(classname, "weapon_taurusjudge", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_sigp226",
-            false
-        )
+        StrEqual(classname, "weapon_sigp226", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_makarov",
-            false
-        )
+        StrEqual(classname, "weapon_makarov", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_deagle",
-            false
-        )
+        StrEqual(classname, "weapon_deagle", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_combatcommander",
-            false
-        )
+        StrEqual(classname, "weapon_combatcommander", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_fiveseven",
-            false
-        )
+        StrEqual(classname, "weapon_fiveseven", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_hkusp",
-            false
-        )
+        StrEqual(classname, "weapon_hkusp", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_model10",
-            false
-        )
+        StrEqual(classname, "weapon_model10", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_mp443",
-            false
-        )
+        StrEqual(classname, "weapon_mp443", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_sigp220",
-            false
-        )
+        StrEqual(classname, "weapon_sigp220", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_beretta93r",
-            false
-        )
+        StrEqual(classname, "weapon_beretta93r", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_cobra",
-            false
-        )
+        StrEqual(classname, "weapon_cobra", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_ots33",
-            false
-        )
+        StrEqual(classname, "weapon_ots33", false)
         ||
-        StrEqual(
-            classname,
-            "weapon_p2a1s",
-            false
-        )
+        StrEqual(classname, "weapon_p2a1s", false)
+    );
+}
+
+/*
+ * ============================================================
+ * CONFIRMED GRENADE / THROWABLE WHITELIST
+ * ============================================================
+ */
+
+bool IsAllowedThrowable(
+    const char[] classname
+)
+{
+    return (
+        /*
+         * Fragmentation
+         */
+        StrEqual(classname, "weapon_m67", false)
+        ||
+        StrEqual(classname, "weapon_f1", false)
+        ||
+        StrEqual(classname, "weapon_m26a2", false)
+
+        /*
+         * Incendiary
+         */
+        ||
+        StrEqual(classname, "weapon_anm14", false)
+        ||
+        StrEqual(classname, "weapon_molotov", false)
+
+        /*
+         * Tactical
+         */
+        ||
+        StrEqual(classname, "weapon_m18", false)
+        ||
+        StrEqual(classname, "weapon_m84", false)
     );
 }
 
@@ -1218,7 +1119,7 @@ void GetRoundName(
             strcopy(
                 buffer,
                 maxlen,
-                "PISTOL + MELEE"
+                "PISTOL + MELEE + GRENADES"
             );
         }
 
