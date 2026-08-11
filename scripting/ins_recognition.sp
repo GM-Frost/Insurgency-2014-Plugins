@@ -55,6 +55,12 @@ public void OnPluginStart()
         "Show your -=LOL=- player profile"
     );
 
+    RegConsoleCmd(
+        "sm_ranks",
+        Command_Ranks,
+        "Show online player recognition ranks"
+    );
+
     RegAdminCmd(
         "sm_recognition_set",
         Command_SetRecognition,
@@ -850,7 +856,388 @@ public Action Command_Profile(
     return Plugin_Handled;
 }
 
+public Action Command_Ranks(
+    int client,
+    int args
+)
+{
+    if (!IsValidHuman(client))
+    {
+        return Plugin_Handled;
+    }
 
+    if (g_HLDB == null)
+    {
+        ConnectHLstats();
+
+        PrintToChat(
+            client,
+            "\x01[\x04-=LOL=-\x01] Rankings are temporarily unavailable."
+        );
+
+        return Plugin_Handled;
+    }
+
+    char idList[4096];
+    idList[0] = '\0';
+
+    int playerCount = 0;
+
+    for (int target = 1; target <= MaxClients; target++)
+    {
+        if (!IsValidHuman(target))
+        {
+            continue;
+        }
+
+        char steamId[64];
+
+        if (!GetClientAuthId(
+            target,
+            AuthId_Steam2,
+            steamId,
+            sizeof(steamId),
+            true
+        ))
+        {
+            continue;
+        }
+
+        char uniqueId[64];
+
+        if (!ConvertSteam2ToHLstatsId(
+            steamId,
+            uniqueId,
+            sizeof(uniqueId)
+        ))
+        {
+            continue;
+        }
+
+        if (playerCount > 0)
+        {
+            StrCat(
+                idList,
+                sizeof(idList),
+                ","
+            );
+        }
+
+        char entry[96];
+
+        Format(
+            entry,
+            sizeof(entry),
+            "'%s'",
+            uniqueId
+        );
+
+        StrCat(
+            idList,
+            sizeof(idList),
+            entry
+        );
+
+        playerCount++;
+    }
+
+    if (playerCount == 0)
+    {
+        PrintToChat(
+            client,
+            "\x01[\x04-=LOL=-\x01] No players found."
+        );
+
+        return Plugin_Handled;
+    }
+
+    DataPack pack = new DataPack();
+
+    pack.WriteCell(
+        GetClientUserId(client)
+    );
+
+    char query[8192];
+
+    Format(
+        query,
+        sizeof(query),
+        "SELECT "
+        ... "uid.uniqueId,"
+        ... "p.connection_time,"
+        ... "1 + ("
+            ... "SELECT COUNT(*) "
+            ... "FROM hlstats_Players p2 "
+            ... "WHERE p2.game='insmod' "
+            ... "AND p2.hideranking=0 "
+            ... "AND p2.skill > p.skill"
+        ... ") AS player_rank "
+        ... "FROM hlstats_PlayerUniqueIds uid "
+        ... "INNER JOIN hlstats_Players p "
+        ... "ON p.playerId=uid.playerId "
+        ... "AND p.game=uid.game "
+        ... "WHERE uid.game='insmod' "
+        ... "AND p.hideranking=0 "
+        ... "AND uid.uniqueId IN (%s);",
+        idList
+    );
+
+    g_HLDB.Query(
+        SQL_RanksLoaded,
+        query,
+        pack
+    );
+
+    return Plugin_Handled;
+}
+
+public void SQL_RanksLoaded(
+    Database db,
+    DBResultSet results,
+    const char[] error,
+    any data
+)
+{
+    DataPack pack = view_as<DataPack>(data);
+    pack.Reset();
+
+    int callerUserid =
+        pack.ReadCell();
+
+    delete pack;
+
+    int client =
+        GetClientOfUserId(callerUserid);
+
+    if (!IsValidHuman(client))
+    {
+        return;
+    }
+
+    if (results == null)
+    {
+        LogError(
+            "[Recognition] Online ranks query failed: %s",
+            error
+        );
+
+        PrintToChat(
+            client,
+            "\x01[\x04-=LOL=-\x01] Could not load online ranks."
+        );
+
+        return;
+    }
+
+    Menu menu = new Menu(
+    Handler_RanksMenu
+    );
+
+    menu.SetTitle(
+        "-=LOL=- ONLINE PLAYER RANKS"
+    );
+
+    char uniqueId[64];
+    int connectionTime;
+    int playerRank;
+
+    while (results.FetchRow())
+    {
+        results.FetchString(
+            0,
+            uniqueId,
+            sizeof(uniqueId)
+        );
+
+        connectionTime =
+            results.FetchInt(1);
+
+        playerRank =
+            results.FetchInt(2);
+
+        int target = 0;
+
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (!IsValidHuman(i))
+            {
+                continue;
+            }
+
+            char steamId[64];
+            char targetUniqueId[64];
+
+            if (!GetClientAuthId(
+                i,
+                AuthId_Steam2,
+                steamId,
+                sizeof(steamId),
+                true
+            ))
+            {
+                continue;
+            }
+
+            if (!ConvertSteam2ToHLstatsId(
+                steamId,
+                targetUniqueId,
+                sizeof(targetUniqueId)
+            ))
+            {
+                continue;
+            }
+
+            if (StrEqual(
+                uniqueId,
+                targetUniqueId,
+                false
+            ))
+            {
+                target = i;
+                break;
+            }
+        }
+
+        if (target == 0)
+        {
+            continue;
+        }
+
+        g_Rank[target] =
+            ResolveRecognitionRank(
+                target,
+                connectionTime
+            );
+
+        char rankName[32];
+
+        GetRankName(
+            g_Rank[target],
+            rankName,
+            sizeof(rankName)
+        );
+
+        char playerName[MAX_NAME_LENGTH];
+
+        if (g_BaseName[target][0] != '\0')
+        {
+            strcopy(
+                playerName,
+                sizeof(playerName),
+                g_BaseName[target]
+            );
+        }
+        else
+        {
+            GetClientName(
+                target,
+                playerName,
+                sizeof(playerName)
+            );
+
+            StripLOLPrefix(
+                playerName,
+                playerName,
+                sizeof(playerName)
+            );
+        }
+
+        char steamExperience[64];
+
+        GetSteamExperienceText(
+            target,
+            steamExperience,
+            sizeof(steamExperience)
+        );
+
+        char line[192];
+
+        char roleText[32];
+        roleText[0] = '\0';
+
+        if (IsClientSourceModAdmin(target))
+        {
+            strcopy(
+                roleText,
+                sizeof(roleText),
+                "LOL ADMIN"
+            );
+        }
+        else if (g_IsLOLMember[target])
+        {
+            strcopy(
+                roleText,
+                sizeof(roleText),
+                "LOL MEMBER"
+            );
+        }
+
+        if (roleText[0] != '\0')
+        {
+            Format(
+                line,
+                sizeof(line),
+                "%s - %s - [%s] - Rank #%d - %s",
+                playerName,
+                roleText,
+                rankName,
+                playerRank,
+                steamExperience
+            );
+        }
+        else
+        {
+            Format(
+                line,
+                sizeof(line),
+                "%s - [%s] - Rank #%d - %s",
+                playerName,
+                rankName,
+                playerRank,
+                steamExperience
+            );
+        }
+
+        menu.AddItem(
+            "",
+            line,
+            ITEMDRAW_DISABLED
+        );
+    }
+
+    menu.ExitBackButton = true;
+
+    menu.Display(
+        client,
+        MENU_TIME_FOREVER
+    );
+}
+
+public int Handler_RanksMenu(
+    Menu menu,
+    MenuAction action,
+    int client,
+    int item
+)
+{
+    if (action == MenuAction_Cancel && item == MenuCancel_ExitBack)
+    {
+        if (CommandExists("sm_menu"))
+        {
+            FakeClientCommand(
+                client,
+                "sm_menu"
+            );
+        }
+    }
+
+    if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
 /*
  * ============================================================
  * PROFILE -> HLSTATS
