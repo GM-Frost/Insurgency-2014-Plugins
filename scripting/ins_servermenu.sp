@@ -198,8 +198,11 @@ void ShowServerMenu(int client)
         Handler_ServerMenu
     );
 
+    menu.Pagination = MENU_NO_PAGINATION;
+    menu.ExitButton = true;
+
     menu.SetTitle(
-        "-=LOL=- LOSERS ONLINE\nSERVER MENU\n\nSelect an option:"
+        "-=LOL=- LOSERS ONLINE\nSERVER MENU\nSelect an option:"
     );
 
     menu.AddItem(
@@ -213,6 +216,11 @@ void ShowServerMenu(int client)
     );
 
     menu.AddItem(
+    "ranks",
+    "Online Player Ranks"
+    );
+
+    menu.AddItem(
         "special",
         "Special Round Vote"
     );
@@ -223,23 +231,18 @@ void ShowServerMenu(int client)
     );
 
     menu.AddItem(
-        "discord",
-        "Discord"
+      "donate",
+      "Support / Donate"
     );
 
     menu.AddItem(
-        "steam",
-        "Steam Community"
+      "community",
+      "Community / Server Info"
     );
 
     menu.AddItem(
         "map",
         "Current / Next Map"
-    );
-
-    menu.AddItem(
-    "donate",
-    "Support -=LOL=-"
     );
 
     menu.ExitButton = true;
@@ -280,6 +283,13 @@ public int Handler_ServerMenu(
         {
             FakeClientCommand(client, "sm_profile");
         }
+        else if (StrEqual(info, "ranks", false))
+        {
+            FakeClientCommand(
+                client,
+                "sm_ranks"
+            );
+        }
         else if (StrEqual(info, "special", false))
         {
             OpenSpecialRoundVote(client);
@@ -288,21 +298,17 @@ public int Handler_ServerMenu(
         {
             ShowRules(client);
         }
-        else if (StrEqual(info, "discord", false))
+        else if (StrEqual(info, "donate", false))
         {
-            ShowDiscord(client);
+            ShowSupportMenu(client);
         }
-        else if (StrEqual(info, "steam", false))
+        else if (StrEqual(info, "community", false))
         {
-            ShowSteam(client);
+            ShowCommunityMenu(client);
         }
         else if (StrEqual(info, "map", false))
         {
             ShowMapInfo(client);
-        }
-        else if (StrEqual(info, "donate", false))
-        {
-            ShowDonate(client);
         }
     }
     else if (action == MenuAction_End)
@@ -892,6 +898,83 @@ void ShowSteam(int client)
     );
 }
 
+void ShowCommunityMenu(int client)
+{
+    Menu menu = new Menu(
+        Handler_CommunityMenu
+    );
+
+    menu.SetTitle(
+        "-=LOL=- COMMUNITY / SERVER INFO\n\nChoose an option:"
+    );
+
+    menu.AddItem(
+        "discord",
+        "Discord"
+    );
+
+    menu.AddItem(
+        "steam",
+        "Steam Community"
+    );
+
+    menu.ExitBackButton = true;
+    menu.ExitButton = true;
+
+    menu.Display(
+        client,
+        30
+    );
+}
+
+public int Handler_CommunityMenu(
+    Menu menu,
+    MenuAction action,
+    int client,
+    int item
+)
+{
+    if (action == MenuAction_Select)
+    {
+        if (!IsValidHuman(client))
+        {
+            return 0;
+        }
+
+        char info[32];
+
+        menu.GetItem(
+            item,
+            info,
+            sizeof(info)
+        );
+
+        if (StrEqual(info, "discord", false))
+        {
+            ShowDiscord(client);
+        }
+        else if (StrEqual(info, "steam", false))
+        {
+            ShowSteam(client);
+        }
+    }
+    else if (action == MenuAction_Cancel)
+    {
+        if (
+            item == MenuCancel_ExitBack
+            && IsValidHuman(client)
+        )
+        {
+            ShowServerMenu(client);
+        }
+    }
+    else if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
 /*
  * ============================================================
  * SUPPORT -=LOL=-
@@ -922,6 +1005,283 @@ void ShowDonate(int client)
     PrintToConsole(client, "");
 }
 
+void ShowSupportMenu(int client)
+{
+    Menu menu = new Menu(
+        Handler_SupportMenu
+    );
+
+    menu.SetTitle(
+        "-=LOL=- SUPPORT THE SERVER\n\nChoose an option:"
+    );
+
+    menu.AddItem(
+        "supporters",
+        "Supporters This Month"
+    );
+
+    menu.AddItem(
+        "donate",
+        "Support / Donate"
+    );
+
+    menu.ExitBackButton = true;
+    menu.ExitButton = true;
+
+    menu.Display(
+        client,
+        30
+    );
+}
+
+public int Handler_SupportMenu(
+    Menu menu,
+    MenuAction action,
+    int client,
+    int item
+)
+{
+    if (action == MenuAction_Select)
+    {
+        if (!IsValidHuman(client))
+        {
+            return 0;
+        }
+
+        char info[32];
+
+        menu.GetItem(
+            item,
+            info,
+            sizeof(info)
+        );
+
+        if (StrEqual(info, "supporters", false))
+        {
+            ShowSupportersThisMonth(client);
+        }
+        else if (StrEqual(info, "donate", false))
+        {
+            ShowDonate(client);
+        }
+    }
+    else if (action == MenuAction_Cancel)
+    {
+        if (
+            item == MenuCancel_ExitBack
+            && IsValidHuman(client)
+        )
+        {
+            ShowServerMenu(client);
+        }
+    }
+    else if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
+
+void ShowSupportersThisMonth(int client)
+{
+    Menu menu = new Menu(
+        Handler_SupportersMenu
+    );
+
+    menu.SetTitle(
+        "-=LOL=- SUPPORTERS THIS MONTH"
+    );
+
+    char path[PLATFORM_MAX_PATH];
+
+    BuildPath(
+        Path_SM,
+        path,
+        sizeof(path),
+        "configs/lol_donors.txt"
+    );
+
+    File file = OpenFile(path, "r");
+
+    if (file == null)
+    {
+        menu.AddItem(
+            "",
+            "No supporter data available.",
+            ITEMDRAW_DISABLED
+        );
+    }
+    else
+    {
+        char line[256];
+        bool found = false;
+
+        while (!file.EndOfFile())
+        {
+            if (!file.ReadLine(line, sizeof(line)))
+            {
+                break;
+            }
+
+            TrimString(line);
+
+            if (
+                line[0] == '\0'
+                || (line[0] == '/' && line[1] == '/')
+            )
+            {
+                continue;
+            }
+
+            int commentPos = StrContains(line, "//", false);
+
+            char supporterName[128];
+            supporterName[0] = '\0';
+
+            if (commentPos != -1)
+            {
+                strcopy(
+                    supporterName,
+                    sizeof(supporterName),
+                    line[commentPos + 2]
+                );
+
+                TrimString(supporterName);
+
+                line[commentPos] = '\0';
+                TrimString(line);
+            }
+
+            char parts[4][64];
+
+            int count = ExplodeString(
+                line,
+                " ",
+                parts,
+                sizeof(parts),
+                sizeof(parts[])
+            );
+
+            if (count < 2)
+            {
+                continue;
+            }
+
+            bool active = false;
+
+            if (StrEqual(parts[1], "forever", false))
+            {
+                active = true;
+            }
+            else if (count >= 3)
+            {
+                char dateParts[3][8];
+
+                if (ExplodeString(
+                    parts[1],
+                    "-",
+                    dateParts,
+                    sizeof(dateParts),
+                    sizeof(dateParts[])
+                ) == 3)
+                {
+                    int year = StringToInt(dateParts[0]);
+                    int month = StringToInt(dateParts[1]);
+                    int day = StringToInt(dateParts[2]);
+                    int durationDays = StringToInt(parts[2]);
+
+                    int startTime = TimeToUnix_Menu(
+                        year,
+                        month,
+                        day
+                    );
+
+                    if (
+                        startTime > 0
+                        && durationDays > 0
+                    )
+                    {
+                        int endTime =
+                            startTime
+                            + (durationDays * 86400);
+
+                        int now = GetTime();
+
+                        active =
+                            now >= startTime
+                            && now < endTime;
+                    }
+                }
+            }
+
+            if (!active)
+            {
+                continue;
+            }
+
+            found = true;
+
+            if (supporterName[0] != '\0')
+            {
+                menu.AddItem(
+                    "",
+                    supporterName,
+                    ITEMDRAW_DISABLED
+                );
+            }
+            else
+            {
+                menu.AddItem(
+                    "",
+                    parts[0],
+                    ITEMDRAW_DISABLED
+                );
+            }
+        }
+
+        delete file;
+
+        if (!found)
+        {
+            menu.AddItem(
+                "",
+                "No active supporters this month.",
+                ITEMDRAW_DISABLED
+            );
+        }
+    }
+
+    menu.ExitBackButton = true;
+    menu.ExitButton = true;
+
+    menu.Display(
+        client,
+        30
+    );
+}
+public int Handler_SupportersMenu(
+    Menu menu,
+    MenuAction action,
+    int client,
+    int item
+)
+{
+    if (
+        action == MenuAction_Cancel
+        && item == MenuCancel_ExitBack
+        && IsValidHuman(client)
+    )
+    {
+        ShowSupportMenu(client);
+    }
+    else if (action == MenuAction_End)
+    {
+        delete menu;
+    }
+
+    return 0;
+}
 /*
  * ============================================================
  * CURRENT / NEXT MAP
@@ -983,6 +1343,68 @@ void ShowMapInfo(int client)
  * CLIENT VALIDATION
  * ============================================================
  */
+
+bool IsLeapYear_Menu(int year)
+{
+    return (
+        (year % 400 == 0)
+        || (
+            year % 4 == 0
+            && year % 100 != 0
+        )
+    );
+}
+
+int TimeToUnix_Menu(
+    int year,
+    int month,
+    int day
+)
+{
+    if (
+        year < 1970
+        || month < 1
+        || month > 12
+        || day < 1
+    )
+    {
+        return 0;
+    }
+
+    int daysInMonth[12] =
+    {
+        31, 28, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31
+    };
+
+    if (IsLeapYear_Menu(year))
+    {
+        daysInMonth[1] = 29;
+    }
+
+    if (day > daysInMonth[month - 1])
+    {
+        return 0;
+    }
+
+    int totalDays = 0;
+
+    for (int y = 1970; y < year; y++)
+    {
+        totalDays += IsLeapYear_Menu(y)
+            ? 366
+            : 365;
+    }
+
+    for (int m = 1; m < month; m++)
+    {
+        totalDays += daysInMonth[m - 1];
+    }
+
+    totalDays += day - 1;
+
+    return totalDays * 86400;
+}
 
 bool IsValidHuman(int client)
 {

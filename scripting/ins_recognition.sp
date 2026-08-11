@@ -7,6 +7,7 @@
 
 #define PLUGIN_VERSION "0.6.0"
 #define LOL_PREFIX "[LOL] "
+#define SUPPORTER_PREFIX "[SUPPORTER] "
 
 Database g_LocalDB = null;
 Database g_HLDB = null;
@@ -27,6 +28,7 @@ enum RecognitionRank
 
 RecognitionRank g_Rank[MAXPLAYERS + 1];
 RecognitionRank g_ManualRank[MAXPLAYERS + 1];
+bool g_IsDonor[MAXPLAYERS + 1];
 bool g_IsLOLMember[MAXPLAYERS + 1];
 char g_BaseName[MAXPLAYERS + 1][MAX_NAME_LENGTH];
 
@@ -270,10 +272,11 @@ public void SQL_GenericCallback(
 
 public void OnClientConnected(int client)
 {
-    g_Rank[client] = Rank_None;
-    g_ManualRank[client] = Rank_None;
-    g_IsLOLMember[client] = false;
-    g_BaseName[client][0] = '\0';
+  g_Rank[client] = Rank_None;
+  g_ManualRank[client] = Rank_None;
+  g_IsLOLMember[client] = false;
+  g_IsDonor[client] = false;
+  g_BaseName[client][0] = '\0';
 }
 
 
@@ -303,6 +306,7 @@ public void OnClientDisconnect(int client)
 {
   g_Rank[client] = Rank_None;
   g_ManualRank[client] = Rank_None;
+  g_IsDonor[client] = false;
   g_IsLOLMember[client] = false;
   g_BaseName[client][0] = '\0';
 }
@@ -388,7 +392,7 @@ void RegisterPlayer(int client)
 
     char cleanName[MAX_NAME_LENGTH];
 
-    StripLOLPrefix(
+    StripServerPrefixes(
         currentName,
         cleanName,
         sizeof(cleanName)
@@ -565,6 +569,9 @@ public void SQL_LoadRecognition(
         || IsClientSourceModAdmin(client)
         || IsLOLMemberFromConfig(client);
 
+    g_IsDonor[client] =
+    IsDonorFromConfig(client);
+
     ApplyLOLDisplayName(client);
 }
 
@@ -592,7 +599,7 @@ public void OnClientSettingsChanged(int client)
 
     char cleanName[MAX_NAME_LENGTH];
 
-    StripLOLPrefix(
+    StripServerPrefixes(
         currentName,
         cleanName,
         sizeof(cleanName)
@@ -688,7 +695,7 @@ void ApplyLOLDisplayName(int client)
 
     if (g_BaseName[client][0] == '\0')
     {
-        StripLOLPrefix(
+        StripServerPrefixes(
             currentName,
             g_BaseName[client],
             sizeof(g_BaseName[])
@@ -697,7 +704,17 @@ void ApplyLOLDisplayName(int client)
 
     char desiredName[MAX_NAME_LENGTH];
 
-    if (g_IsLOLMember[client])
+    if (g_IsDonor[client])
+    {
+        Format(
+            desiredName,
+            sizeof(desiredName),
+            "%s%s",
+            SUPPORTER_PREFIX,
+            g_BaseName[client]
+        );
+    }
+    else if (g_IsLOLMember[client])
     {
         Format(
             desiredName,
@@ -730,7 +747,7 @@ void ApplyLOLDisplayName(int client)
 }
 
 
-void StripLOLPrefix(
+void StripServerPrefixes(
     const char[] input,
     char[] output,
     int maxlen
@@ -741,6 +758,23 @@ void StripLOLPrefix(
         maxlen,
         input
     );
+
+    if (
+        StrContains(
+            output,
+            SUPPORTER_PREFIX,
+            false
+        ) == 0
+    )
+    {
+        ReplaceString(
+            output,
+            maxlen,
+            SUPPORTER_PREFIX,
+            "",
+            false
+        );
+    }
 
     if (
         StrContains(
@@ -758,6 +792,8 @@ void StripLOLPrefix(
             false
         );
     }
+
+    TrimString(output);
 }
 
 
@@ -1135,7 +1171,7 @@ public void SQL_RanksLoaded(
                 sizeof(playerName)
             );
 
-            StripLOLPrefix(
+            StripServerPrefixes(
                 playerName,
                 playerName,
                 sizeof(playerName)
@@ -1152,23 +1188,53 @@ public void SQL_RanksLoaded(
 
         char line[192];
 
-        char roleText[32];
+        char roleText[64];
         roleText[0] = '\0';
 
         if (IsClientSourceModAdmin(target))
         {
-            strcopy(
-                roleText,
-                sizeof(roleText),
-                "LOL ADMIN"
-            );
+            if (g_IsDonor[target])
+            {
+                strcopy(
+                    roleText,
+                    sizeof(roleText),
+                    "LOL ADMIN + SUPPORTER"
+                );
+            }
+            else
+            {
+                strcopy(
+                    roleText,
+                    sizeof(roleText),
+                    "LOL ADMIN"
+                );
+            }
         }
         else if (g_IsLOLMember[target])
+        {
+            if (g_IsDonor[target])
+            {
+                strcopy(
+                    roleText,
+                    sizeof(roleText),
+                    "LOL MEMBER + SUPPORTER"
+                );
+            }
+            else
+            {
+                strcopy(
+                    roleText,
+                    sizeof(roleText),
+                    "LOL MEMBER"
+                );
+            }
+        }
+        else if (g_IsDonor[target])
         {
             strcopy(
                 roleText,
                 sizeof(roleText),
-                "LOL MEMBER"
+                "SUPPORTER"
             );
         }
 
@@ -1198,10 +1264,17 @@ public void SQL_RanksLoaded(
             );
         }
 
+        char info[16];
+
+        IntToString(
+            GetClientUserId(target),
+            info,
+            sizeof(info)
+        );
+
         menu.AddItem(
-            "",
-            line,
-            ITEMDRAW_DISABLED
+            info,
+            line
         );
     }
 
@@ -1220,7 +1293,45 @@ public int Handler_RanksMenu(
     int item
 )
 {
-    if (action == MenuAction_Cancel && item == MenuCancel_ExitBack)
+    if (
+        action == MenuAction_Select
+        && IsValidHuman(client)
+    )
+    {
+        char info[16];
+
+        menu.GetItem(
+            item,
+            info,
+            sizeof(info)
+        );
+
+        int userid =
+            StringToInt(info);
+
+        int target =
+            GetClientOfUserId(userid);
+
+        if (IsValidHuman(target))
+        {
+            ShowProfile(
+                client,
+                target
+            );
+        }
+        else
+        {
+            PrintToChat(
+                client,
+                "\x01[\x04-=LOL=-\x01] Player is no longer connected."
+            );
+        }
+    }
+
+    if (
+        action == MenuAction_Cancel
+        && item == MenuCancel_ExitBack
+    )
     {
         if (CommandExists("sm_menu"))
         {
@@ -1238,6 +1349,8 @@ public int Handler_RanksMenu(
 
     return 0;
 }
+
+
 /*
  * ============================================================
  * PROFILE -> HLSTATS
@@ -1488,7 +1601,7 @@ void ShowProfilePanel(
             sizeof(playerName)
         );
 
-        StripLOLPrefix(
+        StripServerPrefixes(
             playerName,
             playerName,
             sizeof(playerName)
@@ -1516,6 +1629,16 @@ void ShowProfilePanel(
         sizeof(line),
         "LOL Member: %s",
         g_IsLOLMember[target]
+            ? "YES"
+            : "NO"
+    );
+    panel.DrawText(line);
+
+    Format(
+        line,
+        sizeof(line),
+        "Supporter: %s",
+        g_IsDonor[target]
             ? "YES"
             : "NO"
     );
@@ -3328,4 +3451,207 @@ bool IsLOLMemberFromConfig(int client)
 
     delete file;
     return false;
+}
+
+bool IsDonorFromConfig(int client)
+{
+    char steamId[64];
+
+    if (!GetClientAuthId(
+        client,
+        AuthId_Steam2,
+        steamId,
+        sizeof(steamId),
+        true
+    ))
+    {
+        return false;
+    }
+
+    char path[PLATFORM_MAX_PATH];
+
+    BuildPath(
+        Path_SM,
+        path,
+        sizeof(path),
+        "configs/lol_donors.txt"
+    );
+
+    File file = OpenFile(path, "r");
+
+    if (file == null)
+    {
+        return false;
+    }
+
+    char line[256];
+
+    while (!file.EndOfFile())
+    {
+        if (!file.ReadLine(line, sizeof(line)))
+        {
+            break;
+        }
+
+        TrimString(line);
+
+        if (
+            line[0] == '\0'
+            || (line[0] == '/' && line[1] == '/')
+        )
+        {
+            continue;
+        }
+
+        int commentPos = StrContains(line, "//", false);
+
+        if (commentPos != -1)
+        {
+            line[commentPos] = '\0';
+            TrimString(line);
+        }
+
+        char parts[4][64];
+
+        int count = ExplodeString(
+            line,
+            " ",
+            parts,
+            sizeof(parts),
+            sizeof(parts[])
+        );
+
+        if (count < 2)
+        {
+            continue;
+        }
+
+        if (!StrEqual(parts[0], steamId, false))
+        {
+            continue;
+        }
+
+        if (StrEqual(parts[1], "forever", false))
+        {
+            delete file;
+            return true;
+        }
+
+        if (count < 3)
+        {
+            continue;
+        }
+
+        char dateParts[3][8];
+
+        if (ExplodeString(
+            parts[1],
+            "-",
+            dateParts,
+            sizeof(dateParts),
+            sizeof(dateParts[])
+        ) != 3)
+        {
+            continue;
+        }
+
+        int year = StringToInt(dateParts[0]);
+        int month = StringToInt(dateParts[1]);
+        int day = StringToInt(dateParts[2]);
+        int durationDays = StringToInt(parts[2]);
+
+        if (durationDays <= 0)
+        {
+            continue;
+        }
+
+        int startTime = TimeToUnix(
+            year,
+            month,
+            day
+        );
+
+        if (startTime <= 0)
+        {
+            continue;
+        }
+
+        int endTime =
+            startTime
+            + (durationDays * 86400);
+
+        int now = GetTime();
+
+        delete file;
+
+        return (
+            now >= startTime
+            && now < endTime
+        );
+    }
+
+    delete file;
+    return false;
+}
+
+bool IsLeapYear(int year)
+{
+    return (
+        (year % 400 == 0)
+        || (
+            year % 4 == 0
+            && year % 100 != 0
+        )
+    );
+}
+
+int TimeToUnix(
+    int year,
+    int month,
+    int day
+)
+{
+    if (
+        year < 1970
+        || month < 1
+        || month > 12
+        || day < 1
+    )
+    {
+        return 0;
+    }
+
+    int daysInMonth[12] =
+    {
+        31, 28, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31
+    };
+
+    if (IsLeapYear(year))
+    {
+        daysInMonth[1] = 29;
+    }
+
+    if (day > daysInMonth[month - 1])
+    {
+        return 0;
+    }
+
+    int totalDays = 0;
+
+    for (int y = 1970; y < year; y++)
+    {
+        totalDays += IsLeapYear(y)
+            ? 366
+            : 365;
+    }
+
+    for (int m = 1; m < month; m++)
+    {
+        totalDays += daysInMonth[m - 1];
+    }
+
+    totalDays += day - 1;
+
+    return totalDays * 86400;
 }

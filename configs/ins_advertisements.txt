@@ -2,17 +2,17 @@
 {
     "1"
     {
-        "text" "{brightgreen}-=LOL=- LOSERS ONLINE {default}| Rankings, Special Rounds, Rules, Discord, Steam & Server Info | {brightblue} Type {brightyellow} !menu"
+        "text" "{brightgreen}-=LOL=- LOSERS ONLINE {default}| Rankings, Special Rounds, Rules, Discord, Steam & Server Info | {brightblue} Type {brightorange} !menu"
     }
 
     "2"
     {
-        "text" "{brightred}SPECIAL ROUND VOTE {default}| Knife Only or Pistol + Melee + Grenades | {violet}Special Round Vote - {cyan} Type {brightyellow} !menu"
+        "text" "{brightred}SPECIAL ROUND VOTE {default}| Knife Only or Pistol + Melee + Grenades | {violet}Special Round Vote - {brightblue} Type {brightorange} !menu"
     }
 
     "3"
     {
-        "text" "{gold}CHECK YOUR RANK {default}| See your Rank, K/D, Kills, Skill & Top Weapon | {brightyellow}!menu {default} - {brightblue}My Stats"
+        "text" "{brightcyan}CHECK YOUR RANK {default}| See your Rank, K/D, Kills, Skill & Top Weapon | {brightorange}!menu {default} - {brightblue}My Stats"
     }
 
     "4"
@@ -22,12 +22,12 @@
 
     "5"
     {
-        "text" "{brightpurple}JOIN -=LOL=- {default}| Discord, Steam Group & Community Links |{cyan} Type {brightyellow} !menu"
+        "text" "{brightgreen}JOIN -=LOL=- {default}| Discord, Steam Group & Community Links |{brightblue} Type {brightorange} !menu"
     }
 
     "6"
     {
-        "text" "{brightorange}SERVER RULES {default}| Play hard. Play fair. No cheating, exploiting, griefing or harassment |{brightblue} Type {brightyellow} !menu"
+        "text" "{brightgreen}SERVER RULES {default}| Play hard. Play fair. No cheating, exploiting, griefing or harassment |{brightblue} Type {brightorange} !menu"
     }
 
     "7"
@@ -37,11 +37,19 @@
 
     "8"
     {
-        "text" "{brightgreen}-=LOL=- {default}| One command. Everything you need. Stats, Rules, Votes & Community |{brightblue} Type {brightyellow} !menu"
+        "text" "{brightgreen}-=LOL=- {default}| One command. Everything you need. Stats, Rules, Votes & Community |{brightblue} Type {brightorange} !menu"
     }
 
     "9"
     {
-        "text" "{brightpink}SUPPORT -=LOL=- {default}| Enjoy the server and our mods? {default}Help keep the community online | {brightcyan}Type -{brightred}!donate"
+            "text" "{brightpink}SUPPORT -=LOL=- {default}| Help keep the server online & earn the {brightorange}[SUPPORTER] {default}tag | See this month's supporters in {brightorange}!menu {default}→ {brightblue}Support / Donate"
     }
-}
+    "10"
+    {
+            "text" "{brightgreen}WHO'S PLAYING? {default}| See {gold}LOL Members{default}, {brightpink}Supporters {default}& {brightcyan}Veteran / Elite / Legend / Master {default}players | {brightorange}!menu {default}→ {brightblue}Online Player Ranks"
+
+    }
+"11"
+{
+    "text" "{brightpink}COMMUNITY SHOUTOUT {default}| Big thanks to {brightorange}Forons {default}for supporting -=LOL=- and helping keep the server alive! {brightgreen}<3"
+}}
