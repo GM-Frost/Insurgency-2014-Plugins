@@ -2,41 +2,46 @@
 {
     "1"
     {
-        "text" "{green}-=LOL=- {default}Rankings, Special Rounds, Rules, Discord, Steam & Server Info • {yellow}Type !menu"
+        "text" "{brightgreen}-=LOL=- LOSERS ONLINE {default}| Rankings, Special Rounds, Rules, Discord, Steam & Server Info | {brightblue} Type {brightyellow} !menu"
     }
 
     "2"
     {
-        "text" "{red}SPECIAL ROUNDS {default}• Play Knife Only or Pistol + Melee + Grenades • {yellow}!menu → {red}Special Round Vote"
+        "text" "{brightred}SPECIAL ROUND VOTE {default}| Knife Only or Pistol + Melee + Grenades | {violet}Special Round Vote - {cyan} Type {brightyellow} !menu"
     }
 
     "3"
     {
-        "text" "{yellow}CHECK YOUR RANK {default}• Rank, K/D, Kills, Skill & Top Weapon • {yellow}!menu → {blue}My Stats"
+        "text" "{gold}CHECK YOUR RANK {default}| See your Rank, K/D, Kills, Skill & Top Weapon | {brightyellow}!menu {default} - {brightblue}My Stats"
     }
 
     "4"
     {
-        "text" "{cyan}FULL PLAYER STATS {default}• Rankings, weapons and combat history • {orange}Type !menu"
+        "text" "{brightcyan}FULL PLAYER STATS {default}| Rankings, weapons, kills & combat history | {default}Visit through - {brightorange} !menu"
     }
 
     "5"
     {
-        "text" "{blue}JOIN THE COMMUNITY {default}• Discord, Steam Group & Server Links • {yellow}Type !menu"
+        "text" "{brightpurple}JOIN -=LOL=- {default}| Discord, Steam Group & Community Links |{cyan} Type {brightyellow} !menu"
     }
 
     "6"
     {
-        "text" "{yellow}SERVER RULES {default}• Play fair • No cheating, exploits, griefing or harassment • {yellow}Type !menu"
+        "text" "{brightorange}SERVER RULES {default}| Play hard. Play fair. No cheating, exploiting, griefing or harassment |{brightblue} Type {brightyellow} !menu"
     }
 
     "7"
     {
-        "text" "{cyan}SPAWN PROTECTION {default}• Active for 15 seconds • {red}Attacking removes protection"
+        "text" "{teal}SPAWN PROTECTION {default}| Protected for 15 seconds after spawn | {brightred}Attacking removes protection"
     }
 
     "8"
     {
-        "text" "{green}-=LOL=- {default}One command. Everything you need. • {yellow}Type !menu"
+        "text" "{brightgreen}-=LOL=- {default}| One command. Everything you need. Stats, Rules, Votes & Community |{brightblue} Type {brightyellow} !menu"
+    }
+
+    "9"
+    {
+        "text" "{brightpink}SUPPORT -=LOL=- {default}| Enjoy the server and our mods? {default}Help keep the community online | {brightcyan}Type -{brightred}!donate"
     }
 }

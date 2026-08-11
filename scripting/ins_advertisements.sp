@@ -244,19 +244,47 @@ void PrintProfessionalAd(int client, const char[] source)
 
 void ApplyColorTags(char[] message, int maxlen)
 {
+       // Basic
     ReplaceString(message, maxlen, "{default}", "\x01", false);
     ReplaceString(message, maxlen, "{white}",   "\x07F2F2F2", false);
 
+    // Greens
     ReplaceString(message, maxlen, "{green}",   "\x0797D65C", false);
-    ReplaceString(message, maxlen, "{cyan}",    "\x075ED6E8", false);
-    ReplaceString(message, maxlen, "{blue}",    "\x076FA8FF", false);
-    ReplaceString(message, maxlen, "{purple}",  "\x079887E8", false);
+    ReplaceString(message, maxlen, "{lime}",    "\x07B6F26C", false);
 
+    // Blues / Cyans
+    ReplaceString(message, maxlen, "{cyan}",    "\x075ED6E8", false);
+    ReplaceString(message, maxlen, "{teal}",    "\x0758C9B9", false);
+    ReplaceString(message, maxlen, "{blue}",    "\x076FA8FF", false);
+    ReplaceString(message, maxlen, "{navy}",    "\x075C7CCF", false);
+
+    // Purple family
+    ReplaceString(message, maxlen, "{purple}",  "\x079887E8", false);
+    ReplaceString(message, maxlen, "{violet}",  "\x07B47BE8", false);
+    ReplaceString(message, maxlen, "{pink}",    "\x07F27FB2", false);
+    ReplaceString(message, maxlen, "{magenta}", "\x07E66FD1", false);
+
+    // Yellow / Orange
     ReplaceString(message, maxlen, "{yellow}",  "\x07E8C75A", false);
+    ReplaceString(message, maxlen, "{gold}",    "\x07F2B84B", false);
     ReplaceString(message, maxlen, "{orange}",  "\x07E99A45", false);
 
+    // Reds
     ReplaceString(message, maxlen, "{red}",     "\x07E05A5A", false);
-    ReplaceString(message, maxlen, "{muted}",   "\x079A9A9A", false);
+    ReplaceString(message, maxlen, "{coral}",   "\x07F07868", false);
+
+    // Neutral
+    ReplaceString(message, maxlen, "{gray}",    "\x07B0B0B0", false);
+    ReplaceString(message, maxlen, "{silver}",  "\x07CCCCCC", false);
+
+    ReplaceString(message, maxlen, "{brightgreen}", "\x07B7FF6A", false);
+    ReplaceString(message, maxlen, "{brightcyan}",  "\x076FF7FF", false);
+    ReplaceString(message, maxlen, "{brightblue}",  "\x0786BFFF", false);
+    ReplaceString(message, maxlen, "{brightpurple}","\x07C39BFF", false);
+    ReplaceString(message, maxlen, "{brightpink}",  "\x07FF86C8", false);
+    ReplaceString(message, maxlen, "{brightyellow}","\x07FFE66A", false);
+    ReplaceString(message, maxlen, "{brightorange}","\x07FFAE5D", false);
+    ReplaceString(message, maxlen, "{brightred}",   "\x07FF6B6B", false);
 }
 
 public Action Command_CommunityItem(int client, int args)

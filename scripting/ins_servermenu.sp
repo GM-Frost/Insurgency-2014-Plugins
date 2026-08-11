@@ -4,11 +4,12 @@
 #include <sourcemod>
 #include <dbi>
 
-#define PLUGIN_VERSION "1.1.0"
+#define PLUGIN_VERSION "1.2.1"
 
 #define STATS_URL   "https://199.119.136.77/stats/"
 #define DISCORD_URL "https://discord.gg/C3cj4Wf7st"
 #define STEAM_URL   "https://steamcommunity.com/groups/losers-online"
+#define DONATE_URL  "https://ko-fi.com/losersonline"
 
 Database g_DB = null;
 bool g_bDatabaseConnecting = false;
@@ -35,6 +36,11 @@ public void OnPluginStart()
         Command_ServerMenu,
         "Open the -=LOL=- server menu."
     );
+    RegConsoleCmd(
+    "sm_donate",
+    Command_Donate,
+    "Support the -=LOL=- community server."
+    );
 
     CreateConVar(
         "sm_ins_servermenu_version",
@@ -43,7 +49,44 @@ public void OnPluginStart()
         FCVAR_NOTIFY | FCVAR_DONTRECORD
     );
 
+    AddCommandListener(ChatListener_Menu, "say");
+    AddCommandListener(ChatListener_Menu, "say_team");
     ConnectToHLstats();
+}
+
+public Action ChatListener_Menu(
+    int client,
+    const char[] command,
+    int argc
+)
+{
+    if (!IsValidHuman(client))
+    {
+        return Plugin_Continue;
+    }
+
+    char message[192];
+
+    GetCmdArgString(
+        message,
+        sizeof(message)
+    );
+
+    StripQuotes(message);
+    TrimString(message);
+
+    if (
+        StrEqual(message, "!menu", false)
+        || StrEqual(message, "/menu", false)
+        || StrEqual(message, "!servermenu", false)
+        || StrEqual(message, "/servermenu", false)
+    )
+    {
+        ShowServerMenu(client);
+        return Plugin_Handled;
+    }
+
+    return Plugin_Continue;
 }
 
 public void OnPluginEnd()
@@ -128,6 +171,21 @@ public Action Command_ServerMenu(
     return Plugin_Handled;
 }
 
+public Action Command_Donate(
+    int client,
+    int args
+)
+{
+    if (!IsValidHuman(client))
+    {
+        return Plugin_Handled;
+    }
+
+    ShowDonate(client);
+
+    return Plugin_Handled;
+}
+
 /*
  * ============================================================
  * MAIN MENU
@@ -147,6 +205,11 @@ void ShowServerMenu(int client)
     menu.AddItem(
         "stats",
         "My Stats"
+    );
+
+    menu.AddItem(
+    "profile",
+    "Player Profile"
     );
 
     menu.AddItem(
@@ -172,6 +235,11 @@ void ShowServerMenu(int client)
     menu.AddItem(
         "map",
         "Current / Next Map"
+    );
+
+    menu.AddItem(
+    "donate",
+    "Support -=LOL=-"
     );
 
     menu.ExitButton = true;
@@ -208,6 +276,10 @@ public int Handler_ServerMenu(
         {
             ShowStats(client);
         }
+        else if (StrEqual(info, "profile", false))
+        {
+            FakeClientCommand(client, "sm_profile");
+        }
         else if (StrEqual(info, "special", false))
         {
             OpenSpecialRoundVote(client);
@@ -227,6 +299,10 @@ public int Handler_ServerMenu(
         else if (StrEqual(info, "map", false))
         {
             ShowMapInfo(client);
+        }
+        else if (StrEqual(info, "donate", false))
+        {
+            ShowDonate(client);
         }
     }
     else if (action == MenuAction_End)
@@ -814,6 +890,36 @@ void ShowSteam(int client)
         "\x04%s",
         STEAM_URL
     );
+}
+
+/*
+ * ============================================================
+ * SUPPORT -=LOL=-
+ * ============================================================
+ */
+
+void ShowDonate(int client)
+{
+    PrintToChat(
+        client,
+        "\x01[\x04-=LOL=-\x01] SUPPORT -=LOL=-"
+    );
+
+    PrintToChat(
+        client,
+        "\x01Enjoy the server and our mods? Help keep -=LOL=- online!"
+    );
+
+    PrintToChat(
+        client,
+        "\x04%s",
+        DONATE_URL
+    );
+
+    PrintToConsole(client, "");
+    PrintToConsole(client, "-=LOL=- Support:");
+    PrintToConsole(client, "%s", DONATE_URL);
+    PrintToConsole(client, "");
 }
 
 /*
