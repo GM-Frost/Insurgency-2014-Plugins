@@ -8,7 +8,7 @@
 //
 // Attacker:
 //   - Takes the same amount of damage.
-//   - Sees remaining HP using HUD text:
+//   - Sees remaining HP in a dark panel:
 //
 //       HP: 63
 //       Friendly fire reflected
@@ -23,14 +23,10 @@
 #include <sdkhooks>
 #include <sdktools>
 
-#define PLUGIN_VERSION "3.1"
+#define PLUGIN_VERSION "3.2"
 
 ConVar g_CvarEnabled;
 ConVar g_CvarFriendlyFire;
-
-ConVar g_CvarHudDuration;
-ConVar g_CvarHudX;
-ConVar g_CvarHudY;
 
 bool g_LateLoad = false;
 
@@ -89,39 +85,6 @@ public void OnPluginStart()
         1.0
     );
 
-    g_CvarHudDuration = CreateConVar(
-        "sm_reflecttk_hud_duration",
-        "1.8",
-        "How long the friendly-fire HUD message remains visible.",
-        FCVAR_NOTIFY,
-        true,
-        0.1,
-        true,
-        10.0
-    );
-
-    g_CvarHudX = CreateConVar(
-        "sm_reflecttk_hud_x",
-        "-1.0",
-        "Horizontal HUD position. -1.0 = centered.",
-        FCVAR_NOTIFY,
-        true,
-        -1.0,
-        true,
-        1.0
-    );
-
-    g_CvarHudY = CreateConVar(
-        "sm_reflecttk_hud_y",
-        "0.40",
-        "Vertical HUD position.",
-        FCVAR_NOTIFY,
-        true,
-        -1.0,
-        true,
-        1.0
-    );
-
     g_CvarFriendlyFire = FindConVar("mp_friendlyfire");
 
     AutoExecConfig(true, "ins_teamkill");
@@ -160,10 +123,10 @@ public void OnClientPutInServer(int client)
 
 
 // ============================================================================
-// HUD
+// Reflect Notification Panel
 // ============================================================================
 
-void ShowReflectHud(int client, int health, bool lethal)
+void ShowReflectPanel(int client, int health)
 {
     if (client < 1 ||
         client > MaxClients ||
@@ -172,45 +135,41 @@ void ShowReflectHud(int client, int health, bool lethal)
         return;
     }
 
-    if (lethal)
-    {
-        SetHudTextParams(
-            g_CvarHudX.FloatValue,
-            g_CvarHudY.FloatValue,
-            g_CvarHudDuration.FloatValue,
-            255,
-            80,
-            80,
-            255,
-            0,
-            0.0,
-            0.15,
-            0.35
-        );
-    }
-    else
-    {
-        SetHudTextParams(
-            g_CvarHudX.FloatValue,
-            g_CvarHudY.FloatValue,
-            g_CvarHudDuration.FloatValue,
-            255,
-            255,
-            255,
-            255,
-            0,
-            0.0,
-            0.15,
-            0.35
-        );
-    }
+    Panel panel = new Panel();
 
-    ShowHudText(
-        client,
-        4,
+    char message[128];
+
+    Format(
+        message,
+        sizeof(message),
         "HP: %d\nFriendly fire reflected",
         health
     );
+
+    panel.DrawText(message);
+
+    panel.Send(
+        client,
+        NullMenuHandler,
+        2
+    );
+
+    delete panel;
+}
+
+
+// ============================================================================
+// Panel Handler
+// ============================================================================
+
+public int NullMenuHandler(
+    Menu menu,
+    MenuAction action,
+    int param1,
+    int param2
+)
+{
+    return 0;
 }
 
 
@@ -297,7 +256,7 @@ public Action Hook_OnTakeDamage(
 
         if (newHealth <= 0)
         {
-            ShowReflectHud(attacker, 0, true);
+            ShowReflectPanel(attacker, 0);
 
             ForcePlayerSuicide(attacker);
         }
@@ -305,7 +264,7 @@ public Action Hook_OnTakeDamage(
         {
             SetEntityHealth(attacker, newHealth);
 
-            ShowReflectHud(attacker, newHealth, false);
+            ShowReflectPanel(attacker, newHealth);
         }
     }
 
