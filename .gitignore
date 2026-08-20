@@ -17,4 +17,5 @@ tools/sourcemod/
 .idea/
 .DS_Store
 Thumbs.db
-
+*.exe
+include/
