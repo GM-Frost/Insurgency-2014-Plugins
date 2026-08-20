@@ -6,7 +6,8 @@
 // Normal player:
 //   - 2 minutes AFK while on Security / Insurgents -> Spectator
 //   - AFK timer resets when moved to Spectator
-//   - 4 additional minutes AFK in Spectator -> Kick
+//   - 4 additional minutes AFK in Spectator -> eligible for FIFO kick
+//   - Only kicked while every server slot is occupied
 //
 // Admin:
 //   - 2 minutes AFK while on Security / Insurgents -> Spectator
@@ -30,7 +31,7 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION "2.0"
+#define PLUGIN_VERSION "2.1"
 
 #define TEAM_SPECTATOR 1
 #define TEAM_SECURITY  2
@@ -86,7 +87,7 @@ public Plugin myinfo =
 {
     name = "[INS] AFK Manager",
     author = "Nayan",
-    description = "Moves AFK players to Spectator and kicks long-idle spectators.",
+    description = "Moves AFK players to Spectator and FIFO-kicks them only when full.",
     version = PLUGIN_VERSION,
     url = ""
 };
@@ -427,6 +428,17 @@ public Action Timer_CheckAFK(
 
     float now = GetGameTime();
 
+    // Spectator kicks are capacity protection, not routine cleanup.  Select
+    // only one candidate per scan: the non-admin spectator who has been AFK
+    // the longest.  GetClientCount(false) includes connected players in all
+    // teams, including Spectator, which matches actual slot occupancy.
+    bool serverFull = (
+        GetClientCount(false) >= MaxClients
+    );
+
+    int oldestAFKSpectator = 0;
+    float oldestActivity = 0.0;
+
     for (int client = 1; client <= MaxClients; client++)
     {
         if (!IsHumanClient(client))
@@ -515,26 +527,46 @@ public Action Timer_CheckAFK(
         }
 
 
-        float idle = now - g_LastActivity[client];
-        float remaining = kickTime - idle;
+        if (!serverFull)
+        {
+            // No kick is pending while capacity is available.  Reset these so
+            // a fresh warning can be issued if the server later becomes full.
+            g_WarningShown[client] = false;
+            g_FinalWarningShown[client] = false;
+            continue;
+        }
 
+        if (oldestAFKSpectator == 0
+            || g_LastActivity[client] < oldestActivity)
+        {
+            oldestAFKSpectator = client;
+            oldestActivity = g_LastActivity[client];
+        }
+    }
+
+    // FIFO: when full, only the longest-idle eligible spectator is kicked.
+    // Once that player leaves, occupancy drops below MaxClients and no second
+    // spectator is removed unless the server fills again.
+    if (serverFull && oldestAFKSpectator != 0)
+    {
+        float idle = now - g_LastActivity[oldestAFKSpectator];
+        float remaining = g_CvarKickTime.FloatValue - idle;
 
         if (remaining <= 0.0)
         {
             KickPlayerForAFK(
-                client,
+                oldestAFKSpectator,
                 idle
             );
-
-            continue;
         }
-
-
-        HandleAFKWarnings(
-            client,
-            remaining,
-            true
-        );
+        else
+        {
+            HandleAFKWarnings(
+                oldestAFKSpectator,
+                remaining,
+                true
+            );
+        }
     }
 
     return Plugin_Continue;
@@ -773,7 +805,7 @@ void KickPlayerForAFK(
     if (g_CvarAnnounceActions.BoolValue)
     {
         PrintToChatAll(
-            "[AFK] %s was kicked for prolonged inactivity.",
+            "[AFK] %s was kicked for prolonged inactivity because the server was full.",
             name
         );
     }
@@ -792,7 +824,7 @@ void KickPlayerForAFK(
     // There is intentionally NO ban logic in this plugin.
     KickClient(
         client,
-        "[AFK] You were kicked for prolonged inactivity."
+        "[AFK] You were kicked for prolonged inactivity because the server was full."
     );
 }
 

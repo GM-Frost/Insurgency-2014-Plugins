@@ -76,12 +76,13 @@ public void OnPluginStart()
         FCVAR_NOTIFY | FCVAR_DONTRECORD
     );
 
-    RegConsoleCmd("sm_stats", Command_CommunityItem, "Show server statistics link.");
-    RegConsoleCmd("sm_discord", Command_CommunityItem, "Show Discord invite.");
-    RegConsoleCmd("sm_steam", Command_CommunityItem, "Show Steam community link.");
-    RegConsoleCmd("sm_rules", Command_CommunityItem, "Show server rules.");
-    RegConsoleCmd("sm_community", Command_CommunityMenu, "Show community commands.");
-    RegConsoleCmd("sm_help", Command_CommunityMenu, "Show community commands.");
+    /*
+     * Information commands are owned by ins_servermenu.  Registering them in
+     * this plugin made SourceMod send !stats, !discord, and similar commands
+     * to the advertisement lookup.  The current advertisement config has no
+     * command/response records, so valid commands incorrectly appeared to be
+     * unavailable.
+     */
     RegConsoleCmd("sm_ads", Command_CommunityMenu, "Show community commands.");
 
     RegAdminCmd(

@@ -4,7 +4,7 @@
 #include <sourcemod>
 #include <dbi>
 
-#define PLUGIN_VERSION "1.2.1"
+#define PLUGIN_VERSION "1.3.0"
 
 #define STATS_URL   "https://199.119.136.77/stats/"
 #define DISCORD_URL "https://discord.gg/C3cj4Wf7st"
@@ -36,10 +36,41 @@ public void OnPluginStart()
         Command_ServerMenu,
         "Open the -=LOL=- server menu."
     );
+
     RegConsoleCmd(
-    "sm_donate",
-    Command_Donate,
-    "Support the -=LOL=- community server."
+        "sm_stats",
+        Command_Stats,
+        "Show your -=LOL=- player statistics."
+    );
+
+    RegConsoleCmd(
+        "sm_discord",
+        Command_Discord,
+        "Show the -=LOL=- Discord invite."
+    );
+
+    RegConsoleCmd(
+        "sm_steam",
+        Command_Steam,
+        "Show the -=LOL=- Steam community."
+    );
+
+    RegConsoleCmd(
+        "sm_rules",
+        Command_Rules,
+        "Show the -=LOL=- server rules."
+    );
+
+    RegConsoleCmd(
+        "sm_community",
+        Command_Community,
+        "Show the -=LOL=- community menu."
+    );
+
+    RegConsoleCmd(
+        "sm_donate",
+        Command_Donate,
+        "Support the -=LOL=- community server."
     );
 
     CreateConVar(
@@ -75,14 +106,52 @@ public Action ChatListener_Menu(
     StripQuotes(message);
     TrimString(message);
 
-    if (
-        StrEqual(message, "!menu", false)
-        || StrEqual(message, "/menu", false)
-        || StrEqual(message, "!servermenu", false)
-        || StrEqual(message, "/servermenu", false)
-    )
+    if (ChatCommandMatches(message, "menu")
+        || ChatCommandMatches(message, "servermenu"))
     {
         ShowServerMenu(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "stats"))
+    {
+        ShowStats(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "ranks"))
+    {
+        FakeClientCommand(client, "sm_ranks");
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "discord"))
+    {
+        ShowDiscord(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "steam"))
+    {
+        ShowSteam(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "rules"))
+    {
+        ShowRules(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "donate"))
+    {
+        ShowDonate(client);
+        return Plugin_Handled;
+    }
+
+    if (ChatCommandMatches(message, "community"))
+    {
+        ShowCommunityMenu(client);
         return Plugin_Handled;
     }
 
@@ -182,6 +251,56 @@ public Action Command_Donate(
     }
 
     ShowDonate(client);
+
+    return Plugin_Handled;
+}
+
+public Action Command_Stats(int client, int args)
+{
+    if (IsValidHuman(client))
+    {
+        ShowStats(client);
+    }
+
+    return Plugin_Handled;
+}
+
+public Action Command_Discord(int client, int args)
+{
+    if (IsValidHuman(client))
+    {
+        ShowDiscord(client);
+    }
+
+    return Plugin_Handled;
+}
+
+public Action Command_Steam(int client, int args)
+{
+    if (IsValidHuman(client))
+    {
+        ShowSteam(client);
+    }
+
+    return Plugin_Handled;
+}
+
+public Action Command_Rules(int client, int args)
+{
+    if (IsValidHuman(client))
+    {
+        ShowRules(client);
+    }
+
+    return Plugin_Handled;
+}
+
+public Action Command_Community(int client, int args)
+{
+    if (IsValidHuman(client))
+    {
+        ShowCommunityMenu(client);
+    }
 
     return Plugin_Handled;
 }
@@ -1415,4 +1534,17 @@ bool IsValidHuman(int client)
         && IsClientInGame(client)
         && !IsFakeClient(client)
     );
+}
+
+bool ChatCommandMatches(
+    const char[] message,
+    const char[] commandName
+)
+{
+    if (message[0] != '!' && message[0] != '/')
+    {
+        return false;
+    }
+
+    return StrEqual(message[1], commandName, false);
 }

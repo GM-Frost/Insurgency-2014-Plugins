@@ -51,12 +51,6 @@ public void OnPluginStart()
         "Display official Losers Online server information."
     );
 
-    RegConsoleCmd(
-        "sm_donate",
-        Command_Donate,
-        "Display server donation information."
-    );
-
     g_CvarDisplayTime = CreateConVar(
     "sm_lolwelcome_displaytime",
     "50",
@@ -175,27 +169,6 @@ public Action Command_Official(int client, int args)
     PrintToChat(
         client,
         "\x04[LOL]\x01 Beware of fake servers using the -=LOL=- / Losers Online name."
-    );
-
-    return Plugin_Handled;
-}
-
-
-public Action Command_Donate(int client, int args)
-{
-    if (!IsValidHumanClient(client))
-    {
-        return Plugin_Handled;
-    }
-
-    PrintToChat(
-        client,
-        "\x04[LOL]\x01 Want to support the server? Visit our official donation page."
-    );
-
-    PrintToChat(
-        client,
-        "\x04[LOL]\x01 Donation information is available through our official community."
     );
 
     return Plugin_Handled;
