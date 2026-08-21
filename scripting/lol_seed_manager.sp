@@ -3,31 +3,23 @@
 //
 // Insurgency (2014) - Push PvP population seeding.
 //
-// VERSION 1.1
+// VERSION 1.7
 //
 // VERIFIED NATIVE COMMANDS:
 //
-//   ins_bot_add       -> Add Security bot
-//   ins_bot_add_t2    -> Add Insurgent bot
-//
-//   ins_bot_kick_t1   -> Remove one Security bot
-//   ins_bot_kick_t2   -> Remove one Insurgent bot
-//
 // Seed mode:
-//   - Normally active before server reaches 8 human players.
-//   - Targets approximately 5 active participants per faction.
+//   - Empty server: no bots.
+//   - Starts only after the first human selects a team/class and spawns.
+//   - Active while the server has 1-5 playing human players.
+//   - Targets exactly 5 active participants per faction.
+//   - New humans are assigned to the faction with fewer humans.
 //   - Humans replace bots on their own faction.
+//   - When the final playing human leaves, every bot is removed.
 //
 // Live PvP mode:
-//   - Enter at 8 playing humans.
+//   - Enter at 6 playing humans.
 //   - Remove all bots.
-//   - Remain pure PvP while 4+ humans remain.
-//
-// Hysteresis:
-//   >= 8 humans -> LIVE PvP
-//   4-7 humans  -> remain in current state
-//   1-3 humans  -> return to seed mode after delay
-//   0 humans    -> return to seed mode immediately
+//   - Return to seed mode when the population falls below 6 humans.
 //
 // IMPORTANT:
 //
@@ -36,7 +28,7 @@
 //   - Uses native Insurgency NextBots.
 //   - Does NOT create fake clients manually.
 //   - Does NOT modify A2S/Steam/browser reporting.
-//   - Does NOT use ins_bot_quota.
+//   - Uses ins_bot_quota so the game owns bot lifecycle across round changes.
 // ============================================================================
 
 #pragma semicolon 1
@@ -45,26 +37,19 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION "1.1.1"
+#define PLUGIN_VERSION "1.7.1"
 
 // Five active participants per faction while seeded.
 #define SEED_TARGET_PER_TEAM       5
 
-// At eight playing humans, remove every bot.
-#define LIVE_HUMAN_THRESHOLD       8
-
-// Below four humans, eventually return to seeded mode.
-#define SEED_HUMAN_THRESHOLD       3
+// More than five playing humans means pure PvP.
+#define LIVE_HUMAN_THRESHOLD       6
 
 // Periodic sanity reconciliation while server is awake.
 #define RECONCILE_INTERVAL         5.0
 
 // Delay after joins/team initialization.
 #define JOIN_DEBOUNCE              2.0
-
-// Prevent transient disconnect/reconnect from immediately restoring bots.
-#define LOW_POP_DELAY             60.0
-
 
 // ============================================================================
 // Plugin information
@@ -87,6 +72,7 @@ public Plugin myinfo =
 enum SeedState
 {
     SeedState_Unknown = 0,
+    SeedState_Empty,
     SeedState_Seeded,
     SeedState_Live
 };
@@ -105,8 +91,13 @@ int g_SecurityTeam = -1;
 int g_InsurgentTeam = -1;
 
 
-Handle g_LowPopulationTimer = null;
 Handle g_JoinDebounceTimer = null;
+bool g_PendingAutoAssign[MAXPLAYERS + 1];
+bool g_HumanHasSpawned[MAXPLAYERS + 1];
+bool g_HumanDisconnectPending[MAXPLAYERS + 1];
+bool g_SeedActivated = false;
+int g_DesiredBotQuota = 0;
+ConVar g_BotQuota = null;
 
 
 // ============================================================================
@@ -115,6 +106,24 @@ Handle g_JoinDebounceTimer = null;
 
 public void OnPluginStart()
 {
+    g_BotQuota = FindConVar("ins_bot_quota");
+
+    if (g_BotQuota == null)
+    {
+        LogError(
+            "[LOL Seed Manager] ins_bot_quota was not found; native bot management may conflict."
+        );
+    }
+    else
+    {
+        HookConVarChange(
+            g_BotQuota,
+            ConVarChanged_BotQuota
+        );
+
+        SetNativeBotQuota(0);
+    }
+
     HookEvent(
         "round_start",
         Event_RoundStart,
@@ -125,6 +134,18 @@ public void OnPluginStart()
         "round_end",
         Event_RoundEnd,
         EventHookMode_PostNoCopy
+    );
+
+    HookEvent(
+        "player_team",
+        Event_PlayerTeam,
+        EventHookMode_Post
+    );
+
+    HookEvent(
+        "player_spawn",
+        Event_PlayerSpawn,
+        EventHookMode_Post
     );
 
     RegAdminCmd(
@@ -182,13 +203,21 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
-    CancelLowPopulationTimer();
     CancelJoinDebounceTimer();
 
     g_State = SeedState_Unknown;
+    g_SeedActivated = false;
+    g_DesiredBotQuota = 0;
 
     g_SecurityTeam = -1;
     g_InsurgentTeam = -1;
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        g_PendingAutoAssign[client] = false;
+        g_HumanHasSpawned[client] = false;
+        g_HumanDisconnectPending[client] = false;
+    }
 }
 
 
@@ -199,25 +228,56 @@ public void OnConfigsExecuted()
      *
      * The old implementation waited for a timer.
      *
-     * An empty Insurgency server can enter hibernation before that timer
-     * executes.
-     *
-     * OnConfigsExecuted happens during map/server initialization, so we seed
-     * immediately before relying on recurring timers.
+     * OnConfigsExecuted happens during map/server initialization, so we can
+     * remove leftover bots immediately and enter EMPTY mode before hibernation.
      */
 
+    SetNativeBotQuota(0);
     DiscoverTeamIndexes();
 
     ReconcilePopulation();
 }
 
 
+void SetNativeBotQuota(int quota)
+{
+    g_DesiredBotQuota = quota;
+
+    if (g_BotQuota == null || g_BotQuota.IntValue == quota)
+    {
+        return;
+    }
+
+    LogMessage(
+        "[LOL Seed Manager] Setting ins_bot_quota %d -> %d.",
+        g_BotQuota.IntValue,
+        quota
+    );
+
+    g_BotQuota.IntValue = quota;
+}
+
+
+public void ConVarChanged_BotQuota(
+    ConVar convar,
+    const char[] oldValue,
+    const char[] newValue
+)
+{
+    if (convar.IntValue != g_DesiredBotQuota)
+    {
+        SetNativeBotQuota(g_DesiredBotQuota);
+    }
+}
+
+
 public void OnMapEnd()
 {
-    CancelLowPopulationTimer();
     CancelJoinDebounceTimer();
 
+    SetNativeBotQuota(0);
     g_State = SeedState_Unknown;
+    g_SeedActivated = false;
 }
 
 
@@ -243,18 +303,47 @@ public void OnClientPutInServer(int client)
         client
     );
 
+    g_PendingAutoAssign[client] = true;
+    g_HumanHasSpawned[client] = false;
+    g_HumanDisconnectPending[client] = false;
+
     ScheduleJoinReconcile();
+}
+
+
+public void OnClientDisconnect(int client)
+{
+    /*
+     * This forward runs while client classification is still available.
+     * Ignore native bot removals so they cannot trigger extra reconciliation
+     * cycles. The debounce timer executes after a real human has disconnected.
+     */
+
+    if (!IsRealHuman(client))
+    {
+        return;
+    }
+
+    g_PendingAutoAssign[client] = false;
+    g_HumanHasSpawned[client] = false;
+    g_HumanDisconnectPending[client] = true;
 }
 
 
 public void OnClientDisconnect_Post(int client)
 {
-    /*
-     * At this point the disconnect has completed, so human counts no longer
-     * include the departing player.
-     */
+    if (!g_HumanDisconnectPending[client])
+    {
+        return;
+    }
 
-    ScheduleJoinReconcile();
+    g_HumanDisconnectPending[client] = false;
+
+    /*
+     * Reconcile after the human is gone so the final departure removes every
+     * bot before an empty server can hibernate and pause ordinary timers.
+     */
+    ReconcilePopulation();
 }
 
 
@@ -373,8 +462,8 @@ bool DiscoverTeamIndexes()
          *
          *   ins_bot_add       -> Security
          *   ins_bot_add_t2    -> Insurgents
-         *   ins_bot_kick_t1   -> Security
-         *   ins_bot_kick_t2   -> Insurgents
+         *   ins_bot_kick_t1   -> Insurgents
+         *   ins_bot_kick_t2   -> Security
          */
 
         if (StrEqual(teamName, "TEAM ONE", false))
@@ -487,6 +576,22 @@ int CountPlayingHumans()
 }
 
 
+int CountConnectedHumans()
+{
+    int count = 0;
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (IsRealHuman(client))
+        {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+
 int CountAllBots()
 {
     int count = 0;
@@ -503,6 +608,213 @@ int CountAllBots()
 }
 
 
+void TrimExcessBotsOnTeam(int team)
+{
+    int humans = CountHumansOnTeam(team);
+    int bots = CountBotsOnTeam(team);
+    int excess = humans + bots - SEED_TARGET_PER_TEAM;
+
+    if (excess <= 0)
+    {
+        return;
+    }
+
+    LogMessage(
+        "[LOL Seed Manager] Team %d exceeds seed target: H=%d B=%d. Removing %d replacement bot(s).",
+        team,
+        humans,
+        bots,
+        excess
+    );
+
+    for (int client = 1; client <= MaxClients && excess > 0; client++)
+    {
+        if (!IsGameBot(client) || GetClientTeam(client) != team)
+        {
+            continue;
+        }
+
+        KickClient(client, "Human player reclaimed seed slot");
+        excess--;
+    }
+}
+
+
+void TrimSeedTeamsToTarget()
+{
+    if (
+        !EnsureTeamIndexes()
+        || g_DesiredBotQuota != SEED_TARGET_PER_TEAM
+        || CountConnectedHumans() >= LIVE_HUMAN_THRESHOLD
+    )
+    {
+        return;
+    }
+
+    TrimExcessBotsOnTeam(g_SecurityTeam);
+    TrimExcessBotsOnTeam(g_InsurgentTeam);
+}
+
+
+bool HasSpawnedPlayingHuman()
+{
+    if (!EnsureTeamIndexes())
+    {
+        return false;
+    }
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!g_HumanHasSpawned[client] || !IsRealHuman(client))
+        {
+            continue;
+        }
+
+        int team = GetClientTeam(client);
+
+        if (team == g_SecurityTeam || team == g_InsurgentTeam)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+// ============================================================================
+// Seeded human team balancing
+// ============================================================================
+
+void AutoAssignPendingHumans()
+{
+    if (!EnsureTeamIndexes())
+    {
+        return;
+    }
+
+    int securityHumans = CountHumansOnTeam(g_SecurityTeam);
+    int insurgentHumans = CountHumansOnTeam(g_InsurgentTeam);
+
+    /*
+     * Let the first human choose either faction. Once that choice exists,
+     * later arrivals go to the faction with fewer human players.
+     */
+    if (securityHumans + insurgentHumans == 0)
+    {
+        return;
+    }
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!g_PendingAutoAssign[client] || !IsRealHuman(client))
+        {
+            continue;
+        }
+
+        g_PendingAutoAssign[client] = false;
+
+        int currentTeam = GetClientTeam(client);
+
+        if (currentTeam == g_SecurityTeam || currentTeam == g_InsurgentTeam)
+        {
+            continue;
+        }
+
+        int targetTeam;
+
+        if (securityHumans <= insurgentHumans)
+        {
+            targetTeam = g_SecurityTeam;
+            securityHumans++;
+        }
+        else
+        {
+            targetTeam = g_InsurgentTeam;
+            insurgentHumans++;
+        }
+
+        LogMessage(
+            "[LOL Seed Manager] Auto-assigning %N to team %d to balance humans.",
+            client,
+            targetTeam
+        );
+
+        ChangeClientTeam(client, targetTeam);
+    }
+}
+
+
+void BalanceHumanTeamChoice(int client)
+{
+    if (!IsRealHuman(client) || !EnsureTeamIndexes())
+    {
+        return;
+    }
+
+    int totalHumans = CountPlayingHumans();
+
+    if (totalHumans >= LIVE_HUMAN_THRESHOLD)
+    {
+        return;
+    }
+
+    int currentTeam = GetClientTeam(client);
+    int securityHumans = CountHumansOnTeam(g_SecurityTeam);
+    int insurgentHumans = CountHumansOnTeam(g_InsurgentTeam);
+    int targetTeam = currentTeam;
+
+    if (
+        currentTeam == g_SecurityTeam
+        && securityHumans > insurgentHumans + 1
+    )
+    {
+        targetTeam = g_InsurgentTeam;
+    }
+    else if (
+        currentTeam == g_InsurgentTeam
+        && insurgentHumans > securityHumans + 1
+    )
+    {
+        targetTeam = g_SecurityTeam;
+    }
+
+    if (targetTeam == currentTeam)
+    {
+        return;
+    }
+
+    LogMessage(
+        "[LOL Seed Manager] Moving %N from team %d to team %d to balance seeded humans.",
+        client,
+        currentTeam,
+        targetTeam
+    );
+
+    ChangeClientTeam(client, targetTeam);
+}
+
+
+public void Frame_BalanceHumanTeam(any userId)
+{
+    int client = GetClientOfUserId(userId);
+
+    if (client == 0)
+    {
+        return;
+    }
+
+    BalanceHumanTeamChoice(client);
+
+    /*
+     * Reconcile immediately after the team event instead of waiting for the
+     * join debounce. A delayed bot removal can make Insurgency rebuild squads
+     * after the human has already started choosing a class/loadout.
+     */
+    ReconcilePopulation();
+}
+
+
 // ============================================================================
 // Core state machine
 // ============================================================================
@@ -514,15 +826,41 @@ void ReconcilePopulation()
         return;
     }
 
-    int humans = CountPlayingHumans();
+    int connectedHumans = CountConnectedHumans();
+
+    /*
+     * Only a truly empty server disables bots. Once seeding has activated, a
+     * human who moves to Spectator still keeps the seeded match available.
+     */
+    if (connectedHumans == 0)
+    {
+        g_SeedActivated = false;
+        EnterEmptyMode();
+        return;
+    }
+
+    /*
+     * Let the first human complete team, squad, class, and loadout selection.
+     * The first player_spawn event is the signal that bot seeding may begin.
+     */
+    if (!g_SeedActivated && !HasSpawnedPlayingHuman())
+    {
+        EnterEmptyMode();
+        return;
+    }
+
+    g_SeedActivated = true;
 
     /*
      * Startup / map-change state.
      */
 
-    if (g_State == SeedState_Unknown)
+    if (
+        g_State == SeedState_Unknown
+        || g_State == SeedState_Empty
+    )
     {
-        if (humans >= LIVE_HUMAN_THRESHOLD)
+        if (connectedHumans >= LIVE_HUMAN_THRESHOLD)
         {
             EnterLiveMode();
         }
@@ -540,48 +878,18 @@ void ReconcilePopulation()
 
     if (
         g_State == SeedState_Seeded
-        && humans >= LIVE_HUMAN_THRESHOLD
+        && connectedHumans >= LIVE_HUMAN_THRESHOLD
     )
     {
         EnterLiveMode();
         return;
     }
 
-    /*
-     * LIVE state.
-     */
-
     if (g_State == SeedState_Live)
     {
-        /*
-         * Zero humans:
-         *
-         * Do not wait 60 seconds.
-         *
-         * The game may hibernate and timers may stop advancing. There is also
-         * nobody present whose match could be disrupted.
-         */
-
-        if (humans == 0)
+        if (connectedHumans < LIVE_HUMAN_THRESHOLD)
         {
             EnterSeedMode();
-            return;
-        }
-
-        /*
-         * 1-3 humans:
-         *
-         * Wait before restoring bots in case this was just a reconnect or
-         * temporary population fluctuation.
-         */
-
-        if (humans <= SEED_HUMAN_THRESHOLD)
-        {
-            StartLowPopulationTimer();
-        }
-        else
-        {
-            CancelLowPopulationTimer();
         }
 
         return;
@@ -598,6 +906,25 @@ void ReconcilePopulation()
 }
 
 
+void EnterEmptyMode()
+{
+    if (!EnsureTeamIndexes())
+    {
+        return;
+    }
+
+    if (g_State != SeedState_Empty || g_DesiredBotQuota != 0)
+    {
+        LogMessage(
+            "[LOL Seed Manager] Entering EMPTY mode."
+        );
+    }
+
+    g_State = SeedState_Empty;
+    SetNativeBotQuota(0);
+}
+
+
 // ============================================================================
 // Seed mode
 // ============================================================================
@@ -609,15 +936,14 @@ void EnterSeedMode()
         return;
     }
 
-    CancelLowPopulationTimer();
-
     g_State = SeedState_Seeded;
 
     int humans = CountPlayingHumans();
 
     LogMessage(
-        "[LOL Seed Manager] Entering SEED mode. Humans=%d.",
-        humans
+        "[LOL Seed Manager] Entering SEED mode. PlayingHumans=%d ConnectedHumans=%d.",
+        humans,
+        CountConnectedHumans()
     );
 
     MaintainSeedPopulation();
@@ -631,7 +957,7 @@ void MaintainSeedPopulation()
         return;
     }
 
-    int totalHumans = CountPlayingHumans();
+    int totalHumans = CountConnectedHumans();
 
     if (totalHumans >= LIVE_HUMAN_THRESHOLD)
     {
@@ -639,202 +965,8 @@ void MaintainSeedPopulation()
         return;
     }
 
-    int securityHumans =
-        CountHumansOnTeam(g_SecurityTeam);
-
-    int insurgentHumans =
-        CountHumansOnTeam(g_InsurgentTeam);
-
-    int securityBots =
-        CountBotsOnTeam(g_SecurityTeam);
-
-    int insurgentBots =
-        CountBotsOnTeam(g_InsurgentTeam);
-
-
-    /*
-     * Each faction targets five active participants while seeded.
-     *
-     * Example:
-     *
-     *   0 humans:
-     *       Security   5 bots
-     *       Insurgent  5 bots
-     *
-     *   1 Security human:
-     *       Security   1 human + 4 bots
-     *       Insurgent  5 bots
-     *
-     *   2 vs 3 humans:
-     *       Security   2 humans + 3 bots
-     *       Insurgent  3 humans + 2 bots
-     */
-
-    int desiredSecurityBots =
-        SEED_TARGET_PER_TEAM - securityHumans;
-
-    int desiredInsurgentBots =
-        SEED_TARGET_PER_TEAM - insurgentHumans;
-
-
-    if (desiredSecurityBots < 0)
-    {
-        desiredSecurityBots = 0;
-    }
-
-    if (desiredInsurgentBots < 0)
-    {
-        desiredInsurgentBots = 0;
-    }
-
-
-    LogMessage(
-        "[LOL Seed Manager] SEED reconcile: SEC H=%d B=%d->%d | INS H=%d B=%d->%d | TotalHumans=%d.",
-        securityHumans,
-        securityBots,
-        desiredSecurityBots,
-        insurgentHumans,
-        insurgentBots,
-        desiredInsurgentBots,
-        totalHumans
-    );
-
-
-    ReconcileSecurityBots(
-        securityBots,
-        desiredSecurityBots
-    );
-
-    ReconcileInsurgentBots(
-        insurgentBots,
-        desiredInsurgentBots
-    );
-}
-
-
-// ============================================================================
-// Native bot manipulation
-// ============================================================================
-
-void ReconcileSecurityBots(
-    int currentBots,
-    int desiredBots
-)
-{
-    int difference =
-        desiredBots - currentBots;
-
-    if (difference > 0)
-    {
-        AddSecurityBots(difference);
-    }
-    else if (difference < 0)
-    {
-        KickSecurityBots(-difference);
-    }
-}
-
-
-void ReconcileInsurgentBots(
-    int currentBots,
-    int desiredBots
-)
-{
-    int difference =
-        desiredBots - currentBots;
-
-    if (difference > 0)
-    {
-        AddInsurgentBots(difference);
-    }
-    else if (difference < 0)
-    {
-        KickInsurgentBots(-difference);
-    }
-}
-
-
-void AddSecurityBots(int amount)
-{
-    if (amount <= 0)
-    {
-        return;
-    }
-
-    LogMessage(
-        "[LOL Seed Manager] Adding %d Security bot(s).",
-        amount
-    );
-
-    for (int i = 0; i < amount; i++)
-    {
-        ServerCommand("ins_bot_add");
-    }
-
-    ServerExecute();
-}
-
-
-void AddInsurgentBots(int amount)
-{
-    if (amount <= 0)
-    {
-        return;
-    }
-
-    LogMessage(
-        "[LOL Seed Manager] Adding %d Insurgent bot(s).",
-        amount
-    );
-
-    for (int i = 0; i < amount; i++)
-    {
-        ServerCommand("ins_bot_add_t2");
-    }
-
-    ServerExecute();
-}
-
-
-void KickSecurityBots(int amount)
-{
-    if (amount <= 0)
-    {
-        return;
-    }
-
-    LogMessage(
-        "[LOL Seed Manager] Removing %d Security bot(s).",
-        amount
-    );
-
-    for (int i = 0; i < amount; i++)
-    {
-        ServerCommand("ins_bot_kick_t1");
-    }
-
-    ServerExecute();
-}
-
-
-void KickInsurgentBots(int amount)
-{
-    if (amount <= 0)
-    {
-        return;
-    }
-
-    LogMessage(
-        "[LOL Seed Manager] Removing %d Insurgent bot(s).",
-        amount
-    );
-
-    for (int i = 0; i < amount; i++)
-    {
-        ServerCommand("ins_bot_kick_t2");
-    }
-
-    ServerExecute();
+    SetNativeBotQuota(SEED_TARGET_PER_TEAM);
+    TrimSeedTeamsToTarget();
 }
 
 
@@ -849,73 +981,14 @@ void EnterLiveMode()
         return;
     }
 
-    CancelLowPopulationTimer();
-
     g_State = SeedState_Live;
 
-    int humans = CountPlayingHumans();
-
-    int securityBots =
-        CountBotsOnTeam(g_SecurityTeam);
-
-    int insurgentBots =
-        CountBotsOnTeam(g_InsurgentTeam);
-
     LogMessage(
-        "[LOL Seed Manager] Entering LIVE PvP. Humans=%d SecurityBots=%d InsurgentBots=%d.",
-        humans,
-        securityBots,
-        insurgentBots
+        "[LOL Seed Manager] Entering LIVE PvP. ConnectedHumans=%d.",
+        CountConnectedHumans()
     );
 
-    /*
-     * Remove every native bot.
-     *
-     * Commands were verified directly on this server:
-     *
-     *   ins_bot_kick_t1 = Security
-     *   ins_bot_kick_t2 = Insurgents
-     */
-
-    KickSecurityBots(securityBots);
-    KickInsurgentBots(insurgentBots);
-}
-
-
-// ============================================================================
-// Low-population hysteresis
-// ============================================================================
-
-void StartLowPopulationTimer()
-{
-    if (g_LowPopulationTimer != null)
-    {
-        return;
-    }
-
-    LogMessage(
-        "[LOL Seed Manager] Population <= %d. Starting %.0f second seed-return timer.",
-        SEED_HUMAN_THRESHOLD,
-        LOW_POP_DELAY
-    );
-
-    g_LowPopulationTimer = CreateTimer(
-        LOW_POP_DELAY,
-        Timer_LowPopulationExpired,
-        _,
-        TIMER_FLAG_NO_MAPCHANGE
-    );
-}
-
-
-void CancelLowPopulationTimer()
-{
-    if (g_LowPopulationTimer != null)
-    {
-        KillTimer(g_LowPopulationTimer);
-
-        g_LowPopulationTimer = null;
-    }
+    SetNativeBotQuota(0);
 }
 
 
@@ -969,37 +1042,8 @@ public Action Timer_JoinDebounce(
 {
     g_JoinDebounceTimer = null;
 
+    AutoAssignPendingHumans();
     ReconcilePopulation();
-
-    return Plugin_Stop;
-}
-
-
-public Action Timer_LowPopulationExpired(
-    Handle timer,
-    any data
-)
-{
-    g_LowPopulationTimer = null;
-
-    int humans = CountPlayingHumans();
-
-    /*
-     * Only return to seed mode if population is STILL <= 3.
-     */
-
-    if (
-        g_State == SeedState_Live
-        && humans <= SEED_HUMAN_THRESHOLD
-    )
-    {
-        LogMessage(
-            "[LOL Seed Manager] Low population persisted. Humans=%d. Re-entering SEED mode.",
-            humans
-        );
-
-        EnterSeedMode();
-    }
 
     return Plugin_Stop;
 }
@@ -1008,6 +1052,69 @@ public Action Timer_LowPopulationExpired(
 // ============================================================================
 // Round events
 // ============================================================================
+
+public void Event_PlayerTeam(
+    Event event,
+    const char[] name,
+    bool dontBroadcast
+)
+{
+    int client = GetClientOfUserId(event.GetInt("userid"));
+
+    if (!IsRealHuman(client))
+    {
+        return;
+    }
+
+    g_PendingAutoAssign[client] = false;
+
+    /*
+     * Defer the correction until the game has finished processing its own
+     * player_team event. A second event caused by ChangeClientTeam is harmless
+     * because the human counts will already be balanced.
+     */
+    RequestFrame(
+        Frame_BalanceHumanTeam,
+        GetClientUserId(client)
+    );
+}
+
+
+public void Event_PlayerSpawn(
+    Event event,
+    const char[] name,
+    bool dontBroadcast
+)
+{
+    int client = GetClientOfUserId(event.GetInt("userid"));
+
+    if (!IsRealHuman(client))
+    {
+        return;
+    }
+
+    int team = GetClientTeam(client);
+
+    if (team != g_SecurityTeam && team != g_InsurgentTeam)
+    {
+        return;
+    }
+
+    bool firstReadyHuman = !HasSpawnedPlayingHuman();
+
+    g_HumanHasSpawned[client] = true;
+    g_SeedActivated = true;
+
+    if (firstReadyHuman)
+    {
+        LogMessage(
+            "[LOL Seed Manager] First playing human spawned: %N. Activating seed bots.",
+            client
+        );
+    }
+
+    ScheduleJoinReconcile();
+}
 
 public void Event_RoundStart(
     Event event,
@@ -1048,6 +1155,15 @@ public Action Command_SeedStatus(
 
     switch (g_State)
     {
+        case SeedState_Empty:
+        {
+            strcopy(
+                stateName,
+                sizeof(stateName),
+                "EMPTY"
+            );
+        }
+
         case SeedState_Seeded:
         {
             strcopy(
@@ -1103,14 +1219,16 @@ public Action Command_SeedStatus(
 
     ReplyToCommand(
         client,
-        "[LOL Seed] State=%s | SEC H=%d B=%d | INS H=%d B=%d | Humans=%d Bots=%d",
+        "[LOL Seed] State=%s | SEC H=%d B=%d | INS H=%d B=%d | Playing=%d Connected=%d Bots=%d Quota=%d",
         stateName,
         securityHumans,
         securityBots,
         insurgentHumans,
         insurgentBots,
         securityHumans + insurgentHumans,
-        CountAllBots()
+        CountConnectedHumans(),
+        CountAllBots(),
+        g_DesiredBotQuota
     );
 
     return Plugin_Handled;
