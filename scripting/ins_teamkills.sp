@@ -1,13 +1,15 @@
 // ============================================================================
 // [INS] ReflectTK
 //
-// Reflects friendly-fire damage back to the attacker.
+// Protects teammates and applies scaled, progressive reflected damage.
 //
 // Victim:
 //   - Takes no friendly-fire damage.
 //
 // Attacker:
-//   - Takes the same amount of damage.
+//   - Takes reduced reflected damage.
+//   - Cannot be killed by an isolated accident.
+//   - Can be killed after repeated friendly-fire incidents in one round.
 //   - Sees remaining HP in a dark panel:
 //
 //       HP: 63
@@ -23,10 +25,20 @@
 #include <sdkhooks>
 #include <sdktools>
 
-#define PLUGIN_VERSION "3.2"
+#define PLUGIN_VERSION "4.0"
 
 ConVar g_CvarEnabled;
 ConVar g_CvarFriendlyFire;
+ConVar g_CvarDirectScale;
+ConVar g_CvarExplosiveScale;
+ConVar g_CvarIncidentWindow;
+ConVar g_CvarIncidentCap;
+ConVar g_CvarSafetyHealth;
+ConVar g_CvarLethalThreshold;
+
+float g_IncidentStarted[MAXPLAYERS + 1];
+int g_IncidentReflected[MAXPLAYERS + 1];
+int g_RoundReflected[MAXPLAYERS + 1];
 
 bool g_LateLoad = false;
 
@@ -39,7 +51,7 @@ public Plugin myinfo =
 {
     name = "[INS] ReflectTK",
     author = "Nayan",
-    description = "Reflects friendly-fire damage back to the attacker.",
+    description = "Protects teammates with forgiving progressive damage reflection.",
     version = PLUGIN_VERSION,
     url = ""
 };
@@ -85,7 +97,79 @@ public void OnPluginStart()
         1.0
     );
 
+    g_CvarDirectScale = CreateConVar(
+        "sm_reflecttk_direct_scale",
+        "0.50",
+        "Fraction of bullet and melee friendly-fire damage reflected.",
+        FCVAR_NOTIFY,
+        true,
+        0.0,
+        true,
+        1.0
+    );
+
+    g_CvarExplosiveScale = CreateConVar(
+        "sm_reflecttk_explosive_scale",
+        "0.20",
+        "Fraction of explosive and fire friendly-fire damage reflected.",
+        FCVAR_NOTIFY,
+        true,
+        0.0,
+        true,
+        1.0
+    );
+
+    g_CvarIncidentWindow = CreateConVar(
+        "sm_reflecttk_incident_window",
+        "1.25",
+        "Seconds grouped into one friendly-fire incident.",
+        FCVAR_NOTIFY,
+        true,
+        0.1,
+        true,
+        5.0
+    );
+
+    g_CvarIncidentCap = CreateConVar(
+        "sm_reflecttk_incident_cap",
+        "35",
+        "Maximum reflected damage per incident. 0 disables the cap.",
+        FCVAR_NOTIFY,
+        true,
+        0.0,
+        true,
+        500.0
+    );
+
+    g_CvarSafetyHealth = CreateConVar(
+        "sm_reflecttk_safety_health",
+        "10",
+        "Minimum attacker HP before the repeat-offender threshold is reached.",
+        FCVAR_NOTIFY,
+        true,
+        0.0,
+        true,
+        100.0
+    );
+
+    g_CvarLethalThreshold = CreateConVar(
+        "sm_reflecttk_lethal_threshold",
+        "100",
+        "Round reflected damage before reflection may kill. 0 keeps the safety floor permanently.",
+        FCVAR_NOTIFY,
+        true,
+        0.0,
+        true,
+        1000.0
+    );
+
     g_CvarFriendlyFire = FindConVar("mp_friendlyfire");
+
+    HookEvent(
+        "round_start",
+        Event_RoundStart,
+        EventHookMode_PostNoCopy
+    );
 
     AutoExecConfig(true, "ins_teamkill");
 
@@ -114,11 +198,40 @@ public void OnPluginStart()
 
 public void OnClientPutInServer(int client)
 {
+    ResetClientReflection(client);
+
     SDKHook(
         client,
         SDKHook_OnTakeDamage,
         Hook_OnTakeDamage
     );
+}
+
+
+public void OnClientDisconnect(int client)
+{
+    ResetClientReflection(client);
+}
+
+
+public void Event_RoundStart(
+    Event event,
+    const char[] name,
+    bool dontBroadcast
+)
+{
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        ResetClientReflection(client);
+    }
+}
+
+
+void ResetClientReflection(int client)
+{
+    g_IncidentStarted[client] = 0.0;
+    g_IncidentReflected[client] = 0;
+    g_RoundReflected[client] = 0;
 }
 
 
@@ -230,17 +343,15 @@ public Action Hook_OnTakeDamage(
     }
 
     // Save original friendly-fire damage.
-    float reflectedDamage = damage;
+    float friendlyDamage = damage;
 
-    if (reflectedDamage < 0.0)
+    if (friendlyDamage < 0.0)
     {
-        reflectedDamage *= -1.0;
+        friendlyDamage *= -1.0;
     }
 
-    int reflectedAmount = RoundFloat(reflectedDamage);
-
     // Ignore zero / invalid damage callbacks.
-    if (reflectedAmount <= 0)
+    if (friendlyDamage <= 0.0)
     {
         return Plugin_Continue;
     }
@@ -248,24 +359,91 @@ public Action Hook_OnTakeDamage(
     // Completely protect the teammate.
     damage = 0.0;
 
-    // Reflect damage only if attacker is alive.
-    if (IsPlayerAlive(attacker))
+    if (!IsPlayerAlive(attacker))
     {
-        int currentHealth = GetClientHealth(attacker);
-        int newHealth = currentHealth - reflectedAmount;
+        return Plugin_Changed;
+    }
 
-        if (newHealth <= 0)
+    bool explosive =
+        (damagetype & DMG_BLAST) != 0
+        || (damagetype & DMG_BURN) != 0
+        || (damagetype & DMG_SLOWBURN) != 0;
+
+    float scale = explosive
+        ? g_CvarExplosiveScale.FloatValue
+        : g_CvarDirectScale.FloatValue;
+
+    int reflectedAmount = RoundToCeil(
+        friendlyDamage * scale
+    );
+
+    if (reflectedAmount <= 0)
+    {
+        return Plugin_Changed;
+    }
+
+    float now = GetGameTime();
+
+    if (
+        g_IncidentStarted[attacker] <= 0.0
+        || now - g_IncidentStarted[attacker]
+            >= g_CvarIncidentWindow.FloatValue
+    )
+    {
+        g_IncidentStarted[attacker] = now;
+        g_IncidentReflected[attacker] = 0;
+    }
+
+    int incidentCap = g_CvarIncidentCap.IntValue;
+
+    if (incidentCap > 0)
+    {
+        int remaining =
+            incidentCap - g_IncidentReflected[attacker];
+
+        if (remaining <= 0)
         {
-            ShowReflectPanel(attacker, 0);
-
-            ForcePlayerSuicide(attacker);
+            return Plugin_Changed;
         }
-        else
+
+        if (reflectedAmount > remaining)
         {
-            SetEntityHealth(attacker, newHealth);
-
-            ShowReflectPanel(attacker, newHealth);
+            reflectedAmount = remaining;
         }
+    }
+
+    int lethalThreshold =
+        g_CvarLethalThreshold.IntValue;
+
+    bool repeatOffender =
+        lethalThreshold > 0
+        && g_RoundReflected[attacker] >= lethalThreshold;
+
+    g_IncidentReflected[attacker] += reflectedAmount;
+    g_RoundReflected[attacker] += reflectedAmount;
+
+    int currentHealth = GetClientHealth(attacker);
+    int newHealth = currentHealth - reflectedAmount;
+
+    if (!repeatOffender)
+    {
+        int safetyHealth = g_CvarSafetyHealth.IntValue;
+
+        if (newHealth < safetyHealth)
+        {
+            newHealth = safetyHealth;
+        }
+    }
+
+    if (newHealth <= 0)
+    {
+        ShowReflectPanel(attacker, 0);
+        ForcePlayerSuicide(attacker);
+    }
+    else if (newHealth < currentHealth)
+    {
+        SetEntityHealth(attacker, newHealth);
+        ShowReflectPanel(attacker, newHealth);
     }
 
     // Tell SDKHooks that victim damage was changed.

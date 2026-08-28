@@ -3,23 +3,26 @@
 //
 // Insurgency (2014) - Push PvP population seeding.
 //
-// VERSION 1.7
+// VERSION 1.9.1
 //
 // VERIFIED NATIVE COMMANDS:
 //
 // Seed mode:
 //   - Empty server: no bots.
 //   - Starts only after the first human selects a team/class and spawns.
-//   - Active while the server has 1-5 playing human players.
-//   - Targets exactly 5 active participants per faction.
+//   - Active while the server has 1-7 playing human players.
+//   - Targets exactly 7 active participants per faction.
 //   - New humans are assigned to the faction with fewer humans.
 //   - Humans replace bots on their own faction.
+//   - If live population drops below 8, missing bots are added immediately.
 //   - When the final playing human leaves, every bot is removed.
 //
 // Live PvP mode:
-//   - Enter at 6 playing humans.
-//   - Remove all bots.
-//   - Return to seed mode when the population falls below 6 humans.
+//   - At 8+ playing humans, balanced teams remain bot-free.
+//   - If the human teams become uneven, bots reinforce only the smaller team.
+//   - Reinforcement matches the larger human team, capped at 7 participants.
+//   - Humans joining the smaller faction replace its reinforcement bots.
+//   - Native quota follows the desired team size to prevent bot churn.
 //
 // IMPORTANT:
 //
@@ -37,19 +40,22 @@
 #include <sourcemod>
 #include <sdktools>
 
-#define PLUGIN_VERSION "1.7.1"
+#define PLUGIN_VERSION "1.9.1"
 
-// Five active participants per faction while seeded.
-#define SEED_TARGET_PER_TEAM       5
+// Seven active participants per faction while seeded.
+#define SEED_TARGET_PER_TEAM       7
 
-// More than five playing humans means pure PvP.
-#define LIVE_HUMAN_THRESHOLD       6
+// Eight playing humans means pure PvP.
+#define LIVE_HUMAN_THRESHOLD       8
 
 // Periodic sanity reconciliation while server is awake.
 #define RECONCILE_INTERVAL         5.0
 
 // Delay after joins/team initialization.
 #define JOIN_DEBOUNCE              2.0
+
+// Prevent duplicate native add commands while the game creates requested bots.
+#define IMMEDIATE_FILL_COOLDOWN   10.0
 
 // ============================================================================
 // Plugin information
@@ -98,6 +104,7 @@ bool g_HumanDisconnectPending[MAXPLAYERS + 1];
 bool g_SeedActivated = false;
 int g_DesiredBotQuota = 0;
 ConVar g_BotQuota = null;
+float g_NextImmediateFillTime = 0.0;
 
 
 // ============================================================================
@@ -208,6 +215,7 @@ public void OnMapStart()
     g_State = SeedState_Unknown;
     g_SeedActivated = false;
     g_DesiredBotQuota = 0;
+    g_NextImmediateFillTime = 0.0;
 
     g_SecurityTeam = -1;
     g_InsurgentTeam = -1;
@@ -278,6 +286,7 @@ public void OnMapEnd()
     SetNativeBotQuota(0);
     g_State = SeedState_Unknown;
     g_SeedActivated = false;
+    g_NextImmediateFillTime = 0.0;
 }
 
 
@@ -608,11 +617,103 @@ int CountAllBots()
 }
 
 
-void TrimExcessBotsOnTeam(int team)
+void GetDesiredTeamTotals(
+    int &securityTarget,
+    int &insurgentTarget
+)
+{
+    int securityHumans = CountHumansOnTeam(g_SecurityTeam);
+    int insurgentHumans = CountHumansOnTeam(g_InsurgentTeam);
+    int playingHumans = securityHumans + insurgentHumans;
+
+    if (playingHumans < LIVE_HUMAN_THRESHOLD)
+    {
+        securityTarget = SEED_TARGET_PER_TEAM;
+        insurgentTarget = SEED_TARGET_PER_TEAM;
+        return;
+    }
+
+    /*
+     * At live population, reinforce only the smaller human team. Never pad a
+     * faction beyond the seven-player seed target, even if the larger human
+     * team has more than seven players.
+     */
+    securityTarget = securityHumans;
+    insurgentTarget = insurgentHumans;
+
+    if (securityHumans < insurgentHumans)
+    {
+        securityTarget = insurgentHumans;
+
+        if (securityTarget > SEED_TARGET_PER_TEAM)
+        {
+            securityTarget = SEED_TARGET_PER_TEAM;
+        }
+    }
+    else if (insurgentHumans < securityHumans)
+    {
+        insurgentTarget = securityHumans;
+
+        if (insurgentTarget > SEED_TARGET_PER_TEAM)
+        {
+            insurgentTarget = SEED_TARGET_PER_TEAM;
+        }
+    }
+}
+
+
+bool NeedsBotAssistance()
+{
+    if (!EnsureTeamIndexes())
+    {
+        return false;
+    }
+
+    int securityTarget;
+    int insurgentTarget;
+
+    GetDesiredTeamTotals(
+        securityTarget,
+        insurgentTarget
+    );
+
+    return
+        securityTarget > CountHumansOnTeam(g_SecurityTeam)
+        || insurgentTarget > CountHumansOnTeam(g_InsurgentTeam);
+}
+
+
+int GetDesiredNativeBotQuota()
+{
+    int securityTarget;
+    int insurgentTarget;
+
+    GetDesiredTeamTotals(
+        securityTarget,
+        insurgentTarget
+    );
+
+    int quota = insurgentTarget;
+
+    if (securityTarget > quota)
+    {
+        quota = securityTarget;
+    }
+
+    if (quota > SEED_TARGET_PER_TEAM)
+    {
+        quota = SEED_TARGET_PER_TEAM;
+    }
+
+    return quota;
+}
+
+
+void TrimExcessBotsOnTeam(int team, int targetTotal)
 {
     int humans = CountHumansOnTeam(team);
     int bots = CountBotsOnTeam(team);
-    int excess = humans + bots - SEED_TARGET_PER_TEAM;
+    int excess = humans + bots - targetTotal;
 
     if (excess <= 0)
     {
@@ -644,15 +745,104 @@ void TrimSeedTeamsToTarget()
 {
     if (
         !EnsureTeamIndexes()
-        || g_DesiredBotQuota != SEED_TARGET_PER_TEAM
-        || CountConnectedHumans() >= LIVE_HUMAN_THRESHOLD
+        || g_DesiredBotQuota <= 0
     )
     {
         return;
     }
 
-    TrimExcessBotsOnTeam(g_SecurityTeam);
-    TrimExcessBotsOnTeam(g_InsurgentTeam);
+    int securityTarget;
+    int insurgentTarget;
+
+    GetDesiredTeamTotals(
+        securityTarget,
+        insurgentTarget
+    );
+
+    TrimExcessBotsOnTeam(
+        g_SecurityTeam,
+        securityTarget
+    );
+
+    TrimExcessBotsOnTeam(
+        g_InsurgentTeam,
+        insurgentTarget
+    );
+}
+
+
+void FillSeedTeamsImmediately()
+{
+    if (!EnsureTeamIndexes())
+    {
+        return;
+    }
+
+    int securityTarget;
+    int insurgentTarget;
+
+    GetDesiredTeamTotals(
+        securityTarget,
+        insurgentTarget
+    );
+
+    int securityMissing =
+        securityTarget
+        - CountHumansOnTeam(g_SecurityTeam)
+        - CountBotsOnTeam(g_SecurityTeam);
+
+    int insurgentMissing =
+        insurgentTarget
+        - CountHumansOnTeam(g_InsurgentTeam)
+        - CountBotsOnTeam(g_InsurgentTeam);
+
+    if (securityMissing < 0)
+    {
+        securityMissing = 0;
+    }
+
+    if (insurgentMissing < 0)
+    {
+        insurgentMissing = 0;
+    }
+
+    if (securityMissing == 0 && insurgentMissing == 0)
+    {
+        return;
+    }
+
+    float now = GetGameTime();
+
+    if (now < g_NextImmediateFillTime)
+    {
+        return;
+    }
+
+    g_NextImmediateFillTime =
+        now + IMMEDIATE_FILL_COOLDOWN;
+
+    LogMessage(
+        "[LOL Seed Manager] Immediately adding missing seed bots. Security=%d Insurgents=%d.",
+        securityMissing,
+        insurgentMissing
+    );
+
+    /*
+     * Changing ins_bot_quota alone can be deferred by the game until the next
+     * round. These native commands create the missing team bots now; quota
+     * remains authoritative across subsequent round changes.
+     */
+    for (int i = 0; i < securityMissing; i++)
+    {
+        ServerCommand("ins_bot_add");
+    }
+
+    for (int i = 0; i < insurgentMissing; i++)
+    {
+        ServerCommand("ins_bot_add_t2");
+    }
+
+    ServerExecute();
 }
 
 
@@ -860,13 +1050,13 @@ void ReconcilePopulation()
         || g_State == SeedState_Empty
     )
     {
-        if (connectedHumans >= LIVE_HUMAN_THRESHOLD)
+        if (NeedsBotAssistance())
         {
-            EnterLiveMode();
+            EnterSeedMode();
         }
         else
         {
-            EnterSeedMode();
+            EnterLiveMode();
         }
 
         return;
@@ -878,7 +1068,7 @@ void ReconcilePopulation()
 
     if (
         g_State == SeedState_Seeded
-        && connectedHumans >= LIVE_HUMAN_THRESHOLD
+        && !NeedsBotAssistance()
     )
     {
         EnterLiveMode();
@@ -887,7 +1077,7 @@ void ReconcilePopulation()
 
     if (g_State == SeedState_Live)
     {
-        if (connectedHumans < LIVE_HUMAN_THRESHOLD)
+        if (NeedsBotAssistance())
         {
             EnterSeedMode();
         }
@@ -921,6 +1111,7 @@ void EnterEmptyMode()
     }
 
     g_State = SeedState_Empty;
+    g_NextImmediateFillTime = 0.0;
     SetNativeBotQuota(0);
 }
 
@@ -957,15 +1148,14 @@ void MaintainSeedPopulation()
         return;
     }
 
-    int totalHumans = CountConnectedHumans();
-
-    if (totalHumans >= LIVE_HUMAN_THRESHOLD)
+    if (!NeedsBotAssistance())
     {
         EnterLiveMode();
         return;
     }
 
-    SetNativeBotQuota(SEED_TARGET_PER_TEAM);
+    SetNativeBotQuota(GetDesiredNativeBotQuota());
+    FillSeedTeamsImmediately();
     TrimSeedTeamsToTarget();
 }
 
@@ -982,6 +1172,7 @@ void EnterLiveMode()
     }
 
     g_State = SeedState_Live;
+    g_NextImmediateFillTime = 0.0;
 
     LogMessage(
         "[LOL Seed Manager] Entering LIVE PvP. ConnectedHumans=%d.",
