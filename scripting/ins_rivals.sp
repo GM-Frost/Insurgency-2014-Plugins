@@ -10,8 +10,18 @@
 
 #include <sourcemod>
 
-#define PLUGIN_VERSION "1.5.0"
+#define PLUGIN_VERSION "2.0.1"
 #define MAX_PANEL_RIVALS 3
+
+enum RivalMessagePool
+{
+    Pool_Nemesis = 0,
+    Pool_Five,
+    Pool_Seven,
+    Pool_Ten,
+    Pool_Revenge,
+    Pool_Count
+};
 
 ConVar g_CvarEnabled;
 ConVar g_CvarNemesisKills;
@@ -25,6 +35,7 @@ ConVar g_CvarPanelTime;
 
 // Directed unanswered kill count: killer -> victim.
 int g_Unanswered[MAXPLAYERS + 1][MAXPLAYERS + 1];
+int g_LastMessage[Pool_Count];
 
 
 public Plugin myinfo =
@@ -60,12 +71,12 @@ public void OnPluginStart()
     g_CvarNemesisKills = CreateConVar(
         "sm_lol_rivals_nemesis_kills",
         "3",
-        "Unanswered kills required to become a nemesis.",
+        "Unanswered kills required to become a nemesis. Fixed at 3 for these callouts.",
         FCVAR_NOTIFY,
         true,
-        2.0,
+        3.0,
         true,
-        10.0
+        3.0
     );
 
     g_CvarPrivateWarnings = CreateConVar(
@@ -163,20 +174,88 @@ public void OnPluginStart()
         EventHookMode_Post
     );
 
+    // Team changes invalidate an enemy-only rivalry. HookEventEx keeps the
+    // plugin load-safe if a particular game build does not expose this event.
+    HookEventEx(
+        "player_team",
+        Event_PlayerTeam,
+        EventHookMode_Post
+    );
+
     AutoExecConfig(true, "ins_rivals");
     ResetAllRivalries();
+    ResetMessageHistory();
 }
 
 
 public void OnMapStart()
 {
     ResetAllRivalries();
+    ResetMessageHistory();
+}
+
+
+public void OnClientPutInServer(int client)
+{
+    ResetClientRivalries(client);
 }
 
 
 public void OnClientDisconnect(int client)
 {
     ResetClientRivalries(client);
+}
+
+
+public void Event_PlayerTeam(
+    Event event,
+    const char[] name,
+    bool dontBroadcast
+)
+{
+    int client = GetClientOfUserId(event.GetInt("userid"));
+
+    if (client >= 1 && client <= MaxClients && IsClientInGame(client))
+    {
+        // Delay until all automatic side-swap events have settled. Rivalries
+        // remain intact when both players swap and are still opponents.
+        CreateTimer(
+            0.50,
+            Timer_RevalidateRivalries,
+            GetClientUserId(client),
+            TIMER_FLAG_NO_MAPCHANGE
+        );
+    }
+}
+
+
+public Action Timer_RevalidateRivalries(Handle timer, any userId)
+{
+    int client = GetClientOfUserId(userId);
+
+    if (!IsValidHuman(client))
+    {
+        return Plugin_Stop;
+    }
+
+    int clientTeam = GetClientTeam(client);
+
+    for (int rival = 1; rival <= MaxClients; rival++)
+    {
+        if (
+            rival == client
+            || !IsValidHuman(rival)
+            || GetClientTeam(rival) != clientTeam
+        )
+        {
+            continue;
+        }
+
+        g_Unanswered[client][rival] = 0;
+        g_Unanswered[rival][client] = 0;
+    }
+
+    return Plugin_Stop;
 }
 
 
@@ -221,7 +300,8 @@ public void Event_PlayerDeath(
         AnnounceRevenge(attacker, victim);
 
         g_Unanswered[victim][attacker] = 0;
-        g_Unanswered[attacker][victim] = 0;
+        // The revenge kill is also the first unanswered kill of a new streak.
+        g_Unanswered[attacker][victim] = 1;
         return;
     }
 
@@ -243,8 +323,7 @@ public void Event_PlayerDeath(
         AnnounceDominanceMilestone(
             attacker,
             victim,
-            streak,
-            nemesisKills
+            streak
         );
     }
     else if (
@@ -257,224 +336,143 @@ public void Event_PlayerDeath(
 }
 
 
+int PickDifferentMessage(RivalMessagePool pool)
+{
+    int poolIndex = view_as<int>(pool);
+    int selected = GetRandomInt(0, 7);
+
+    if (g_LastMessage[poolIndex] == selected)
+    {
+        selected = (selected + GetRandomInt(1, 7)) % 8;
+    }
+
+    g_LastMessage[poolIndex] = selected;
+    return selected;
+}
+
+
+void BuildNemesisMessage(
+    int attacker,
+    int victim,
+    char[] output,
+    int maxLength
+)
+{
+    switch (PickDifferentMessage(Pool_Nemesis))
+    {
+        case 0: Format(output, maxLength, "\x07D5D7DC%N\x01, this is getting embarrassing.", victim);
+        case 1: Format(output, maxLength, "\x07D5D7DC%N\x01 has lost the same gunfight three different ways.", victim);
+        case 2: Format(output, maxLength, "\x07D5D7DC%N\x01, blink twice if you need backup.", victim);
+        case 3: Format(output, maxLength, "\x07D5D7DC%N\x01, whatever the plan is, it isn't working.", victim);
+        case 4: Format(output, maxLength, "\x07D5D7DC%N\x01 is 0-3 and still approaching with confidence.", victim);
+        case 5: Format(output, maxLength, "\x07D5D7DC%N\x01, maybe stop peeking the same fucking guy.", victim);
+        case 6: Format(output, maxLength, "\x07D5D7DC%N\x01 is starting to look nervous around \x07C58CFF%N\x01.", victim, attacker);
+        case 7: Format(output, maxLength, "\x07D5D7DC%N\x01 is running out of ways to call this bad luck.", victim);
+    }
+}
+
+
+void BuildFiveMessage(
+    int attacker,
+    int victim,
+    char[] output,
+    int maxLength
+)
+{
+    switch (PickDifferentMessage(Pool_Five))
+    {
+        case 0: Format(output, maxLength, "\x07D5D7DC%N\x01 sees \x07C58CFF%N\x01 and forgets how to aim.", victim, attacker);
+        case 1: Format(output, maxLength, "\x07D5D7DC%N\x01 keeps showing up like the result might change.", victim);
+        case 2: Format(output, maxLength, "\x07D5D7DC%N\x01 has died to \x07C58CFF%N\x01 in every available position.", victim, attacker);
+        case 3: Format(output, maxLength, "\x07D5D7DC%N's\x01 strategy remains spawn, search, die.", victim);
+        case 4: Format(output, maxLength, "\x07D5D7DC%N\x01, try something besides dying first.", victim);
+        case 5: Format(output, maxLength, "\x07D5D7DC%N\x01 keeps dying before the fight becomes interesting.", victim);
+        case 6: Format(output, maxLength, "\x07D5D7DC%N\x01, changing weapons won't fix whatever this is.", victim);
+        case 7: Format(output, maxLength, "Five straight. \x07D5D7DC%N\x01 is officially out of excuses.", victim);
+    }
+}
+
+
+void BuildSevenMessage(
+    int attacker,
+    int victim,
+    char[] output,
+    int maxLength
+)
+{
+    switch (PickDifferentMessage(Pool_Seven))
+    {
+        case 0: strcopy(output, maxLength, "This is bullying. Keep going.");
+        case 1: Format(output, maxLength, "\x07D5D7DC%N\x01 sees \x07C58CFF%N\x01 and dies automatically.", victim, attacker);
+        case 2: Format(output, maxLength, "Somebody tell \x07D5D7DC%N\x01 that he can shoot back.", victim);
+        case 3: strcopy(output, maxLength, "Seven straight. Even the kill feed is getting bored.");
+        case 4: Format(output, maxLength, "\x07D5D7DC%N\x01 has tried everything except staying alive.", victim);
+        case 5: Format(output, maxLength, "\x07D5D7DC%N\x01 has died seven times and still looks surprised.", victim);
+        case 6: Format(output, maxLength, "\x07D5D7DC%N\x01 is helping \x07C58CFF%N\x01 more than his own team.", victim, attacker);
+        case 7: Format(output, maxLength, "\x07D5D7DC%N\x01 is seven deaths deep and still taking the same route.", victim);
+    }
+}
+
+
+void BuildTenMessage(
+    int victim,
+    char[] output,
+    int maxLength
+)
+{
+    switch (PickDifferentMessage(Pool_Ten))
+    {
+        case 0: strcopy(output, maxLength, "Double digits. This needs adult supervision.");
+        case 1: strcopy(output, maxLength, "Ten deaths. Not one useful adjustment.");
+        case 2: Format(output, maxLength, "Even probability has stopped defending \x07D5D7DC%N\x01.", victim);
+        case 3: strcopy(output, maxLength, "The kill feed has stopped pretending this is news.");
+        case 4: Format(output, maxLength, "\x07D5D7DC%N\x01 has died more times than some players have fired.", victim);
+        case 5: Format(output, maxLength, "\x07D5D7DC%N\x01 has spent ten lives reaching the same conclusion.", victim);
+        case 6: Format(output, maxLength, "\x07D5D7DC%N\x01 has been wrong ten times in a row with a rifle.", victim);
+        case 7: strcopy(output, maxLength, "Ten straight. At this point, surviving would be suspicious.");
+    }
+}
+
+
+void BuildRevengeMessage(
+    int attacker,
+    int formerNemesis,
+    int endedStreak,
+    char[] output,
+    int maxLength
+)
+{
+    switch (PickDifferentMessage(Pool_Revenge))
+    {
+        case 0: Format(output, maxLength, "\x07C58CFF%N\x01 got one! Nobody fucking move.", attacker);
+        case 1: Format(output, maxLength, "\x07C58CFF%N\x01 remembered which button shoots.", attacker);
+        case 2: Format(output, maxLength, "\x07C58CFF%N\x01 finally killed \x07D5D7DC%N\x01. Screenshot it.", attacker, formerNemesis);
+        case 3: Format(output, maxLength, "\x07C58CFF%N\x01 killed \x07D5D7DC%N\x01. The server has witnessed a miracle.", attacker, formerNemesis);
+        case 4: Format(output, maxLength, "\x07C58CFF%N\x01 finally answered. The kill feed had to double-check.", attacker);
+        case 5: Format(output, maxLength, "\x07C58CFF%N\x01 got revenge. Please remain calm.", attacker);
+        case 6: Format(output, maxLength, "\x07C58CFF%N\x01 killed \x07D5D7DC%N\x01. Witnesses are being interviewed.", attacker, formerNemesis);
+        case 7: Format(output, maxLength, "\x07C58CFF%N\x01 broke the streak. Only took %d attempts.", attacker, endedStreak + 1);
+    }
+}
+
+
 void AnnounceDominanceMilestone(
     int attacker,
     int victim,
-    int streak,
-    int nemesisKills
+    int streak
 )
 {
-    int extraKills = streak - nemesisKills;
-    char title[64];
     char detail[256];
-    char color[16];
 
-    if (extraKills == 1)
+    switch (streak)
     {
-        strcopy(color, sizeof(color), "\x07FFAE5D");
-
-        if (GetRandomInt(0, 1) == 0)
-        {
-            strcopy(title, sizeof(title), "RENT FREE");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x07F2B84B%N\x01 moved into \x076FF7FF%N's\x01 head and changed the locks!",
-                attacker,
-                victim
-            );
-        }
-        else
-        {
-            strcopy(title, sizeof(title), "FOUND YOU AGAIN");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x07F2B84B%N\x01 found \x076FF7FF%N\x01 again. Maybe try a different route?",
-                attacker,
-                victim
-            );
-        }
-    }
-    else if (extraKills == 2)
-    {
-        strcopy(color, sizeof(color), "\x07FF6B6B");
-
-        if (GetRandomInt(0, 1) == 0)
-        {
-            strcopy(title, sizeof(title), "FREE KILL SUBSCRIPTION");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x076FF7FF%N\x01 forgot to cancel \x07F2B84B%N's\x01 free-kill subscription, and auto-renew is on!",
-                victim,
-                attacker
-            );
-        }
-        else
-        {
-            strcopy(title, sizeof(title), "RESPAWN SPONSOR");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x076FF7FF%N\x01 is personally sponsoring \x07F2B84B%N's\x01 score!",
-                victim,
-                attacker
-            );
-        }
-    }
-    else if (extraKills == 4)
-    {
-        strcopy(color, sizeof(color), "\x07C39BFF");
-
-        switch (GetRandomInt(0, 2))
-        {
-            case 0:
-            {
-                strcopy(title, sizeof(title), "PERSONAL HIGHLIGHT REEL");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x076FF7FF%N\x01 is now starring in \x07F2B84B%N's\x01 personal highlight reel!",
-                    victim,
-                    attacker
-                );
-            }
-
-            case 1:
-            {
-                strcopy(title, sizeof(title), "SKILL ISSUE CONFIRMED");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "The investigation is over: \x076FF7FF%N\x01 has a confirmed skill issue against \x07F2B84B%N\x01!",
-                    victim,
-                    attacker
-                );
-            }
-
-            case 2:
-            {
-                strcopy(title, sizeof(title), "CHECK THEIR PING");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "Someone check \x076FF7FF%N's\x01 ping; \x07F2B84B%N\x01 keeps making them disappear!",
-                    victim,
-                    attacker
-                );
-            }
-        }
-    }
-    else if (extraKills == 7)
-    {
-        strcopy(color, sizeof(color), "\x07FF6B6B");
-
-        switch (GetRandomInt(0, 2))
-        {
-            case 0:
-            {
-                strcopy(title, sizeof(title), "THIS IS NO LONGER A RIVALRY");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x07F2B84B%N\x01 versus \x076FF7FF%N\x01 is no longer a rivalry. This is scheduled farming.",
-                    attacker,
-                    victim
-                );
-            }
-
-            case 1:
-            {
-                strcopy(title, sizeof(title), "KILL FEED ON REPEAT");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x07F2B84B%N\x01 keeps sending \x076FF7FF%N\x01 back; even the kill feed knows the script!",
-                    attacker,
-                    victim
-                );
-            }
-
-            case 2:
-            {
-                strcopy(title, sizeof(title), "CALL FOR BACKUP");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x076FF7FF%N\x01 should call for backup. Actually, call everybody before \x07F2B84B%N\x01 returns.",
-                    victim,
-                    attacker
-                );
-            }
-        }
-    }
-    else if (extraKills > 7 && streak % 5 == 0)
-    {
-        strcopy(color, sizeof(color), "\x07B47BE8");
-
-        switch (GetRandomInt(0, 3))
-        {
-            case 0:
-            {
-                strcopy(title, sizeof(title), "ABSOLUTELY FARMED");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x07F2B84B%N\x01 has farmed \x076FF7FF%N\x01 so much the process is now automated!",
-                    attacker,
-                    victim
-                );
-            }
-
-            case 1:
-            {
-                strcopy(title, sizeof(title), "RESPAWN SCREEN VIP");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x076FF7FF%N\x01 earned VIP seating on the respawn screen, courtesy of \x07F2B84B%N\x01!",
-                    victim,
-                    attacker
-                );
-            }
-
-            case 2:
-            {
-                strcopy(title, sizeof(title), "PLEASE CHANGE YOUR ROUTE");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x076FF7FF%N\x01 should change route; \x07F2B84B%N\x01 already pre-aimed the next one!",
-                    victim,
-                    attacker
-                );
-            }
-
-            case 3:
-            {
-                strcopy(title, sizeof(title), "FREE DELIVERY");
-                Format(
-                    detail,
-                    sizeof(detail),
-                    "\x07F2B84B%N\x01 keeps delivering \x076FF7FF%N\x01 to the same destination: respawn.",
-                    attacker,
-                    victim
-                );
-            }
-        }
-    }
-    else
-    {
-        return;
+        case 5: BuildFiveMessage(attacker, victim, detail, sizeof(detail));
+        case 7: BuildSevenMessage(attacker, victim, detail, sizeof(detail));
+        case 10: BuildTenMessage(victim, detail, sizeof(detail));
+        default: return;
     }
 
-    PrintRivalryCallout(
-        color,
-        title,
-        streak,
-        detail
-    );
+    PrintRivalryCallout(streak, detail);
 
     SendPersonalStreakStatus(
         attacker,
@@ -485,23 +483,15 @@ void AnnounceDominanceMilestone(
 
 
 void PrintRivalryCallout(
-    const char[] color,
-    const char[] title,
     int streak,
     const char[] detail
 )
 {
-    // Two short messages protect the headline and UTF-8 player names from
-    // truncation when players use long clan tags or multibyte names.
     PrintToChatAll(
-        "\x01[\x0797D65C-=LOL=-\x01] %s%s\x01 | %s%d-0\x01",
-        color,
-        title,
-        color,
-        streak
+        "\x01[\x079CFF57-=LOL=-\x01] \x07FF7138%d-0\x01 | %s",
+        streak,
+        detail
     );
-
-    PrintToChatAll("\x01  >> %s", detail);
 }
 
 
@@ -525,14 +515,14 @@ void SendPersonalStreakStatus(
 
     PrintToChat(
         attacker,
-        "\x01[\x0797D65C-=LOL=-\x01] \x07B7FF6AYOUR STREAK\x01 | You have \x076FF7FF%N\x01 at \x07B7FF6A%d-0\x01. Keep the pressure on!",
+        "\x01[\x079CFF57-=LOL=-\x01] \x07FF7138STREAK\x01 | You have \x07D5D7DC%N\x01 \x07FF7138%d-0\x01.",
         victim,
         streak
     );
 
     PrintToChat(
         victim,
-        "\x01[\x0797D65C-=LOL=-\x01] \x07FF6B6BREVENGE TARGET\x01 | \x07F2B84B%N\x01 has you at \x07FF6B6B0-%d\x01. End the streak!",
+        "\x01[\x079CFF57-=LOL=-\x01] \x0758F2C2REVENGE\x01 | \x07C58CFF%N\x01 has you \x07FF71380-%d\x01. Kill him.",
         attacker,
         streak
     );
@@ -548,13 +538,13 @@ void SendPrivateWarnings(
 {
     PrintToChat(
         attacker,
-        "\x01[\x0797D65C-=LOL=-\x01] \x07FFAE5DRIVAL ALERT\x01 | One more kill on \x076FF7FF%N\x01 makes you their \x07FF6B6BNEMESIS\x01!",
+        "\x01[\x079CFF57-=LOL=-\x01] \x07FF7138RIVAL\x01 | One more kill makes you \x07D5D7DC%N's\x01 nemesis.",
         victim
     );
 
     PrintToChat(
         victim,
-        "\x01[\x0797D65C-=LOL=-\x01] \x07FFAE5DRIVAL ALERT\x01 | \x07F2B84B%N\x01 defeated you \x07FFAE5D%d times\x01. Stop them before they become your \x07FF6B6BNEMESIS\x01!",
+        "\x01[\x079CFF57-=LOL=-\x01] \x07FF7138WARNING\x01 | \x07C58CFF%N\x01 has you \x07FF71380-%d\x01. Kill him.",
         attacker,
         streak
     );
@@ -567,16 +557,9 @@ void AnnounceNemesis(
     int streak
 )
 {
-    PrintToChatAll(
-        "\x01[\x0797D65C-=LOL=-\x01] \x07FF6B6BNEMESIS DECLARED\x01 | \x07FF6B6B%d-0\x01",
-        streak
-    );
-
-    PrintToChatAll(
-        "\x01  >> \x07F2B84B%N\x01 became \x076FF7FF%N's\x01 nemesis. Revenge is the only way out!",
-        attacker,
-        victim
-    );
+    char detail[256];
+    BuildNemesisMessage(attacker, victim, detail, sizeof(detail));
+    PrintRivalryCallout(streak, detail);
 
     SendPersonalStreakStatus(
         attacker,
@@ -606,55 +589,17 @@ void AnnounceRevenge(int attacker, int formerNemesis)
     int endedStreak =
         g_Unanswered[formerNemesis][attacker];
 
-    char title[64];
     char detail[256];
-
-    switch (GetRandomInt(0, 2))
-    {
-        case 0:
-        {
-            strcopy(title, sizeof(title), "SUBSCRIPTION CANCELLED");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x076FF7FF%N\x01 finally cancelled \x07FF6B6B%N's\x01 free-kill subscription!",
-                attacker,
-                formerNemesis
-            );
-        }
-
-        case 1:
-        {
-            strcopy(title, sizeof(title), "THE CURSE IS BROKEN");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x076FF7FF%N\x01 broke the curse and finally took \x07FF6B6B%N\x01 down!",
-                attacker,
-                formerNemesis
-            );
-        }
-
-        case 2:
-        {
-            strcopy(title, sizeof(title), "FINALLY, THE SCRIPT CHANGED");
-            Format(
-                detail,
-                sizeof(detail),
-                "\x076FF7FF%N\x01 finally changed the script and gave the kill feed new content against \x07FF6B6B%N\x01!",
-                attacker,
-                formerNemesis
-            );
-        }
-    }
-
-    PrintToChatAll(
-        "\x01[\x0797D65C-=LOL=-\x01] \x07B7FF6AREVENGE\x01 | \x07B7FF6A%s\x01",
-        title
+    BuildRevengeMessage(
+        attacker,
+        formerNemesis,
+        endedStreak,
+        detail,
+        sizeof(detail)
     );
 
     PrintToChatAll(
-        "\x01  >> %s \x07F2B84BRivalry reset.\x01",
+        "\x01[\x079CFF57-=LOL=-\x01] \x0758F2C2REVENGE\x01 | %s",
         detail
     );
 
@@ -662,14 +607,14 @@ void AnnounceRevenge(int attacker, int formerNemesis)
     {
         PrintToChat(
             attacker,
-            "\x01[\x0797D65C-=LOL=-\x01] \x07B7FF6AREVENGE COMPLETE\x01 | You ended \x07FF6B6B%N's\x01 \x07B7FF6A%d-kill streak\x01!",
+            "\x01[\x079CFF57-=LOL=-\x01] \x0758F2C2REVENGE\x01 | You ended \x07D5D7DC%N's\x01 \x07FF7138%d-kill streak\x01.",
             formerNemesis,
             endedStreak
         );
 
         PrintToChat(
             formerNemesis,
-            "\x01[\x0797D65C-=LOL=-\x01] \x07FF6B6BSTREAK ENDED\x01 | \x076FF7FF%N\x01 finally answered your \x07FF6B6B%d-kill streak\x01.",
+            "\x01[\x079CFF57-=LOL=-\x01] \x07FF7138STREAK ENDED\x01 | \x07C58CFF%N\x01 got revenge after \x07FF7138%d deaths\x01.",
             attacker,
             endedStreak
         );
@@ -791,35 +736,55 @@ void ShowRivalsPanel(int client)
     int nemesisKills = g_CvarNemesisKills.IntValue;
     int shown = 0;
     char line[128];
+    bool used[MAXPLAYERS + 1];
+
+    for (int rival = 1; rival <= MaxClients; rival++)
+    {
+        used[rival] = false;
+    }
 
     panel.DrawText(" ");
     panel.DrawText("YOUR NEMESIS:");
 
-    for (int rival = 1; rival <= MaxClients; rival++)
+    while (shown < MAX_PANEL_RIVALS)
     {
-        if (
-            !IsValidHuman(rival)
-            || g_Unanswered[rival][client] < nemesisKills
-        )
+        int bestRival = 0;
+        int bestStreak = 0;
+
+        for (int rival = 1; rival <= MaxClients; rival++)
         {
-            continue;
+            int streak = g_Unanswered[rival][client];
+
+            if (
+                used[rival]
+                || !IsValidHuman(rival)
+                || streak < nemesisKills
+                || streak <= bestStreak
+            )
+            {
+                continue;
+            }
+
+            bestRival = rival;
+            bestStreak = streak;
         }
 
+        if (bestRival == 0)
+        {
+            break;
+        }
+
+        used[bestRival] = true;
         Format(
             line,
             sizeof(line),
             "%N - %d unanswered deaths",
-            rival,
-            g_Unanswered[rival][client]
+            bestRival,
+            bestStreak
         );
 
         panel.DrawText(line);
         shown++;
-
-        if (shown >= MAX_PANEL_RIVALS)
-        {
-            break;
-        }
     }
 
     if (shown == 0)
@@ -833,29 +798,47 @@ void ShowRivalsPanel(int client)
 
     for (int rival = 1; rival <= MaxClients; rival++)
     {
-        if (
-            !IsValidHuman(rival)
-            || g_Unanswered[client][rival] <= 0
-        )
+        used[rival] = false;
+    }
+
+    while (shown < MAX_PANEL_RIVALS)
+    {
+        int bestRival = 0;
+        int bestStreak = 0;
+
+        for (int rival = 1; rival <= MaxClients; rival++)
         {
-            continue;
+            int streak = g_Unanswered[client][rival];
+
+            if (
+                used[rival]
+                || !IsValidHuman(rival)
+                || streak <= bestStreak
+            )
+            {
+                continue;
+            }
+
+            bestRival = rival;
+            bestStreak = streak;
         }
 
+        if (bestRival == 0)
+        {
+            break;
+        }
+
+        used[bestRival] = true;
         Format(
             line,
             sizeof(line),
             "%N - %d unanswered kills",
-            rival,
-            g_Unanswered[client][rival]
+            bestRival,
+            bestStreak
         );
 
         panel.DrawText(line);
         shown++;
-
-        if (shown >= MAX_PANEL_RIVALS)
-        {
-            break;
-        }
     }
 
     if (shown == 0)
@@ -923,5 +906,14 @@ void ResetAllRivalries()
         {
             g_Unanswered[client][rival] = 0;
         }
+    }
+}
+
+
+void ResetMessageHistory()
+{
+    for (int pool = 0; pool < view_as<int>(Pool_Count); pool++)
+    {
+        g_LastMessage[pool] = -1;
     }
 }
